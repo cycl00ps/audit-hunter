@@ -38,7 +38,7 @@ benefit from runtime confirmation.
 The repo is mounted at `repo_path` and you can read it with Read, Grep,
 Glob, and Bash (use Bash only for read-only inspection: `git log --oneline
 -20`, `find`, `file`, `wc -l`, `head`, `cat`, `ls`, language-specific
-listings like `cargo metadata`, `npm ls`, `go list ./...`, `pip show`,
+listings like `cargo metadata`, `npm ls`, `go list ./...`, `uv pip show`,
 `make -n`). Do not modify the repo.
 
 # Tools available

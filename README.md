@@ -103,48 +103,46 @@ Install the CLI from the `vuln-hunter/` directory:
 
 ```bash
 cd vuln-hunter
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync --extra dev
 ```
 
 Configure authentication for Codex/OpenAI:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-audit auth-check
+uv run audit auth-check
 ```
 
 Run a one-off audit:
 
 ```bash
-audit run --repo /path/to/target --run-id my-run \
+uv run audit run --repo /path/to/target --run-id my-run \
   --max-concurrency 1 \
   --max-recon-tasks 15 \
   --max-tokens 200000
 
-audit status --run-id my-run
-audit report --run-id my-run --format md > report.md
+uv run audit status --run-id my-run
+uv run audit report --run-id my-run --format md > report.md
 ```
 
 Run a campaign:
 
 ```bash
-audit campaign run --repo /path/to/target \
+uv run audit campaign run --repo /path/to/target \
   --campaign-id my-campaign \
   --runs 5 \
   --stop-after-empty 2 \
   --max-tokens 500000
 
-audit campaign status --campaign-id my-campaign
-audit campaign report --campaign-id my-campaign --format md > campaign-report.md
+uv run audit campaign status --campaign-id my-campaign
+uv run audit campaign report --campaign-id my-campaign --format md > campaign-report.md
 ```
 
 Pass scope notes when the threat-model review identifies exclusions or
 priorities:
 
 ```bash
-audit run --repo /path/to/target \
+uv run audit run --repo /path/to/target \
   --run-id scoped-run \
   --scope-notes /path/to/scope-notes.md
 ```
@@ -153,7 +151,7 @@ If a live deployment is available, `vuln-hunter` can ask agents to reproduce
 findings against it:
 
 ```bash
-audit run --repo /path/to/target --run-id live \
+uv run audit run --repo /path/to/target --run-id live \
   --target-url http://server.local:8888 \
   --target-creds email=admin@example.com \
   --target-creds password=change-me \

@@ -86,7 +86,7 @@ is `{task_id, findings: [...], gaps_observed: [...]}`. No prose.
    - Set `confidence` honestly based on how convinced you are.
    - **Attempt a PoC**:
      - If `live_target` is in input: prefer reproducing against the live
-       service. Use Bash + `curl` / `python3 -c "import requests..."`
+       service. Use Bash + `curl` / `uv run --no-project python -c "..."`
        to send the actual request. Log in with the credentials if needed.
        Capture the raw request and response into `poc.code`/`poc.run_output`.
        Set `poc.language = "curl"` or `"python"`. **If the bug does not

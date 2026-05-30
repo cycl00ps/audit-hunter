@@ -55,8 +55,7 @@ every output is shape-stable on the first try.
 
 ```bash
 # 1. Install
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
+uv sync --extra dev
 
 # 2. Auth (pick one)
 #    (a) Use the OpenAI API key already in your shell:
@@ -65,12 +64,12 @@ export OPENAI_API_KEY="sk-..."
 printenv OPENAI_API_KEY | codex login --with-api-key
 
 # 3. Verify
-audit auth-check
+uv run audit auth-check
 
 # 4. Run
-audit run --repo /path/to/target --run-id my-run
-audit status --run-id my-run
-audit report --run-id my-run --format md > report.md
+uv run audit run --repo /path/to/target --run-id my-run
+uv run audit status --run-id my-run
+uv run audit report --run-id my-run --format md > report.md
 ```
 
 By default the agent runs `codex exec` subprocesses and authenticates with
@@ -80,9 +79,9 @@ printed or persisted by this project.
 To start from a clean run database, use:
 
 ```bash
-audit db reset --yes              # remove state.db only
-audit db reset --yes --all        # also remove results/ and work/
-audit db reset --all --dry-run    # preview cleanup targets
+uv run audit db reset --yes              # remove state.db only
+uv run audit db reset --yes --all        # also remove results/ and work/
+uv run audit db reset --all --dry-run    # preview cleanup targets
 ```
 
 ## Using a different model / provider
@@ -91,8 +90,8 @@ audit db reset --all --dry-run    # preview cleanup targets
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-audit auth-check
-audit run --repo /path/to/target --run-id codex-run --max-tokens 200000
+uv run audit auth-check
+uv run audit run --repo /path/to/target --run-id codex-run --max-tokens 200000
 ```
 
 Edit `config/stages.yaml` to change the per-stage Codex/OpenAI models and
@@ -107,8 +106,8 @@ The previous Claude Code SDK path is preserved for users who want it:
 
 ```bash
 claude login
-audit auth-check --provider claude
-audit run --provider claude --repo /path/to/target --run-id crun
+uv run audit auth-check --provider claude
+uv run audit run --provider claude --repo /path/to/target --run-id crun
 ```
 
 Claude gateway, OAuth-token, and metered `ANTHROPIC_API_KEY` modes still
@@ -123,7 +122,7 @@ validate. At default concurrency this can burn through a lot of tokens. Flags
 to keep it bounded:
 
 ```bash
-audit run --repo /path/to/target \
+uv run audit run --repo /path/to/target \
   --max-concurrency 1 \           # one agent subprocess at a time
   --max-recon-tasks 15 \          # cap initial Hunt fanout
   --max-tokens 200000             # abort cleanly if exceeded
@@ -143,7 +142,7 @@ a local PoC, Validate **rejects** findings that don't reproduce, and Trace
 remains available — these flags are opt-in.
 
 ```bash
-audit run --repo /path/to/target --run-id live \
+uv run audit run --repo /path/to/target --run-id live \
   --max-concurrency 1 --max-tokens 200000 \
   --target-url http://server.local:8888 \
   --target-creds email=admin@system.com \
@@ -166,7 +165,7 @@ notes are appended verbatim to every stage's user_input, and Recon / Hunt /
 Validate honor exclusions you list.
 
 ```bash
-audit run --repo /path/to/target --scope-notes target_scope.md
+uv run audit run --repo /path/to/target --scope-notes target_scope.md
 ```
 
 Example `target_scope.md`:
