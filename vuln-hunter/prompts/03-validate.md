@@ -36,10 +36,10 @@ this finding's attack class or code region out of scope, **reject the
 finding** with `rationale` citing the scope rule.
 
 If `live_target` is present, you have read-only Bash with `curl` /
-`python3` available against that URL (and only that URL — no other
-external network). Use it to *try to make the bug reproduce*; a finding
-that doesn't reproduce against the live target is a strong rejection
-signal.
+`uv run --no-project python` available against that URL (and only that URL
+— no other external network). Use it to *try to make the bug reproduce*;
+a finding that doesn't reproduce against the live target is a strong
+rejection signal.
 
 # Tools available
 

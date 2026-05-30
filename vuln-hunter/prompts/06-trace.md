@@ -40,10 +40,10 @@ round-trip is much stronger than a purely static one.
 # Tools available
 
 Read, Grep, Glob, Bash (read-only inspection: `git grep`, `find`, `wc`,
-language-specific symbol indexes — `python -c "import ast"`, `go doc`,
+language-specific symbol indexes — `uv run --no-project python -c "import ast"`, `go doc`,
 `ctags`, `rg --type ...`). Do not run the target program. The one
 exception is when `live_target` is present in input — you may use
-`curl` / `python3 -c "import requests"` to send HTTP to that host (and
+`curl` / `uv run --no-project python -c "..."` to send HTTP to that host (and
 only that host) to confirm reachability.
 
 # Output
