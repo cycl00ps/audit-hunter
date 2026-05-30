@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "generated": "2026-05-29T21:21:25+10:00",
+  "severity_thresholds": {
+    "block_merge": "CRITICAL",
+    "require_review": "HIGH",
+    "inform": "MEDIUM"
+  },
+  "confidence_threshold": 0.8,
+  "excluded_paths": [
+    "tests/",
+    "docs/",
+    "results/",
+    "work/",
+    ".venv/",
+    ".pytest_cache/",
+    "audit.egg-info/",
+    "__pycache__/"
+  ],
+  "tech_stack": [
+    "Python 3.11",
+    "Click CLI",
+    "asyncio subprocesses",
+    "SQLite",
+    "Pydantic",
+    "jsonschema Draft 7",
+    "PyYAML",
+    "python-dotenv",
+    "Rich",
+    "Codex CLI",
+    "Claude Agent SDK",
+    "pytest"
+  ],
+  "artifact_root": ".audit-hunter"
+}
