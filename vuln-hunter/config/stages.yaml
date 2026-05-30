@@ -1,0 +1,59 @@
+# Per-stage configuration. Model diversity between Hunt and Validate is
+# load-bearing: it implements the blog's "deliberate disagreement" rule.
+# Codex is the default provider; use `audit run --provider claude --config ...`
+# with Claude model names if you want the legacy Claude SDK path.
+
+defaults:
+  provider: codex
+  max_turns: 25
+  permission_mode: acceptEdits   # never bypassPermissions
+  repair_attempts: 1             # one re-emit chance on schema-validation failure
+
+stages:
+  recon:
+    model: gpt-5.5
+    reasoning_effort: xhigh
+    concurrency: 1
+    tools: [Read, Grep, Glob, Bash]
+    max_turns: 60                # recon can be long
+    repair_attempts: 2           # critical one-shot; spend a second repair turn if needed
+  hunt:
+    model: gpt-5.4-mini
+    reasoning_effort: medium
+    concurrency: 50
+    tools: [Read, Grep, Glob, Bash]
+  validate:
+    model: gpt-5.5               # different from hunt — deliberate disagreement
+    reasoning_effort: xhigh
+    concurrency: 10
+    tools: [Read, Grep, Glob]     # no Bash: pure analysis
+  gapfill:
+    model: gpt-5.4-mini
+    reasoning_effort: medium
+    concurrency: 1
+    tools: [Read, Grep, Glob]
+  dedupe:
+    model: gpt-5.4-mini
+    reasoning_effort: medium
+    concurrency: 1
+    tools: [Read]
+  trace:
+    model: gpt-5.5               # most critical stage
+    reasoning_effort: xhigh
+    concurrency: 10
+    tools: [Read, Grep, Glob, Bash]
+  feedback:
+    model: gpt-5.4-mini
+    reasoning_effort: medium
+    concurrency: 1
+    tools: [Read, Grep, Glob]
+  report:
+    model: gpt-5.4-mini
+    reasoning_effort: medium
+    concurrency: 1
+    tools: [Read]
+
+# Bounded loops to prevent runaway cost
+loops:
+  gapfill_iterations: 2     # max Hunt → Validate → Gapfill cycles
+  feedback_iterations: 1    # one feedback pass after Trace

@@ -1,0 +1,47 @@
+# Legacy Claude Code Agent SDK stage configuration.
+
+defaults:
+  provider: claude
+  max_turns: 25
+  permission_mode: acceptEdits
+  repair_attempts: 1
+
+stages:
+  recon:
+    model: claude-opus-4-7
+    concurrency: 1
+    tools: [Read, Grep, Glob, Bash]
+    max_turns: 60
+    repair_attempts: 2
+  hunt:
+    model: claude-sonnet-4-6
+    concurrency: 50
+    tools: [Read, Grep, Glob, Bash]
+  validate:
+    model: claude-opus-4-7
+    concurrency: 10
+    tools: [Read, Grep, Glob]
+  gapfill:
+    model: claude-sonnet-4-6
+    concurrency: 1
+    tools: [Read, Grep, Glob]
+  dedupe:
+    model: claude-sonnet-4-6
+    concurrency: 1
+    tools: [Read]
+  trace:
+    model: claude-opus-4-7
+    concurrency: 10
+    tools: [Read, Grep, Glob, Bash]
+  feedback:
+    model: claude-sonnet-4-6
+    concurrency: 1
+    tools: [Read, Grep, Glob]
+  report:
+    model: claude-sonnet-4-6
+    concurrency: 1
+    tools: [Read]
+
+loops:
+  gapfill_iterations: 2
+  feedback_iterations: 1

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Hunter"
+  short_description: "Generate STRIDE threat models"
+  default_prompt: "Use $audit-hunter to generate a STRIDE threat model and security config for this codebase."
