@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Audit Hunter Combined Report",
+  "type": "object",
+  "required": ["schema_version", "tool", "run_id", "generated_at", "target", "summary", "reports"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string" },
+    "tool": { "const": "audit-hunter" },
+    "run_id": { "type": "string" },
+    "generated_at": { "type": "number" },
+    "target": { "type": "object" },
+    "summary": {
+      "type": "object",
+      "required": ["total", "by_tool"],
+      "additionalProperties": false,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "by_tool": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "path", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "tool": { "type": "string" },
+          "path": { "type": "string" },
+          "summary": { "type": "object" }
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""SQLite-backed run state. JSONL artifacts in results/ are the source of
+"""SQLite-backed run state. JSONL artifacts in scratch/ are the source of
 truth for raw agent output; this DB is the queryable index used for
 orchestration, resume, and reporting."""
 

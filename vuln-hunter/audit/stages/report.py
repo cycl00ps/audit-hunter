@@ -30,7 +30,7 @@ async def run_report(ctx: StageContext, db: StateDB) -> Path:
     user_input = {"run_id": ctx.run_id, "target": target, "ready_findings": ready,
                   **ctx.extras()}
 
-    out_path = ctx.results_dir("report") / "report.json"
+    out_path = ctx.report_path()
 
     if not ready:
         # No reachable findings — emit a minimal empty report without burning an agent call.

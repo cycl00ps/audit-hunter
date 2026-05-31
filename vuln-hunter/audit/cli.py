@@ -43,10 +43,24 @@ def _provider_from_env_or_flag(provider: str | None) -> tuple[str, bool]:
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = REPO_ROOT.parent
 DB_PATH = REPO_ROOT / "state.db"
-RESULTS_ROOT = REPO_ROOT / "results"
+RESULTS_ROOT = Path(os.environ.get("AUDIT_REPORTS_DIR") or PROJECT_ROOT / "reports").expanduser().resolve()
+SCRATCH_ROOT = Path(os.environ.get("AUDIT_SCRATCH_DIR") or PROJECT_ROOT / "scratch").expanduser().resolve()
 
 console = Console()
+
+
+def _reports_root(override: str | None = None) -> Path:
+    if override:
+        return Path(override).expanduser().resolve()
+    return RESULTS_ROOT
+
+
+def _scratch_root(override: str | None = None) -> Path:
+    if override:
+        return Path(override).expanduser().resolve()
+    return SCRATCH_ROOT
 
 
 def _open_state_db_or_exit() -> StateDB:
@@ -72,7 +86,7 @@ def _setup_logging(verbose: bool) -> None:
 @click.option("-v", "--verbose", is_flag=True, help="DEBUG logging.")
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
-    """audit — Cloudflare-style 8-stage vulnerability discovery agent."""
+    """vuln-hunter — Cloudflare-style vulnerability discovery agent."""
     ctx.ensure_object(dict)
     _setup_logging(verbose)
 
@@ -157,6 +171,10 @@ def auth_check(provider: str | None, allow_api_key: bool) -> None:
                    "rules / exclusions; passed verbatim to every stage.")
 @click.option("--config", "config_path", default=None, type=click.Path(),
               help="Override config/stages.yaml.")
+@click.option("--scratch-dir", default=None, type=click.Path(file_okay=False),
+              help="Override scratch directory for raw artifacts and work dirs.")
+@click.option("--reports-dir", default=None, type=click.Path(file_okay=False),
+              help="Override reports directory for final reports.")
 @click.option("--provider", type=click.Choice(["codex", "claude"]), default=None,
               help="Agent provider to use for every stage "
                    "(default: AUDIT_PROVIDER or codex).")
@@ -169,7 +187,8 @@ def run(repo: str, run_id: str | None, resume: bool, max_cost_usd: float | None,
         reasoning_effort: str | None,
         target_url: str | None, target_creds: tuple[str, ...],
         scope_notes_path: str | None,
-        config_path: str | None, provider: str | None,
+        config_path: str | None, scratch_dir: str | None, reports_dir: str | None,
+        provider: str | None,
         allow_api_key: bool) -> None:
     """Run the full 8-stage pipeline against a target repo."""
     allow = _allow_api_key_from_env_or_flag(allow_api_key)
@@ -223,6 +242,8 @@ def run(repo: str, run_id: str | None, resume: bool, max_cost_usd: float | None,
 
     run_id = run_id or f"run_{uuid.uuid4().hex[:8]}"
     repo_path = Path(repo).resolve()
+    resolved_reports_root = _reports_root(reports_dir)
+    resolved_scratch_root = _scratch_root(scratch_dir)
 
     db = _open_state_db_or_exit()
     try:
@@ -237,6 +258,8 @@ def run(repo: str, run_id: str | None, resume: bool, max_cost_usd: float | None,
             max_recon_tasks=max_recon_tasks,
             live_target=live_target,
             scope_notes=scope_notes,
+            reports_root=resolved_reports_root,
+            scratch_root=resolved_scratch_root,
         ))
         console.print(f"[green]done[/green] run_id={run_id} report={report}")
     except CostExceeded as e:
@@ -290,6 +313,10 @@ def campaign_cmd() -> None:
               help="Optional: path to target-specific scope rules / exclusions.")
 @click.option("--config", "config_path", default=None, type=click.Path(),
               help="Override config/stages.yaml.")
+@click.option("--scratch-dir", default=None, type=click.Path(file_okay=False),
+              help="Override scratch directory for raw artifacts and work dirs.")
+@click.option("--reports-dir", default=None, type=click.Path(file_okay=False),
+              help="Override reports directory for final reports.")
 @click.option("--provider", type=click.Choice(["codex", "claude"]), default=None,
               help="Agent provider to use for every stage "
                    "(default: AUDIT_PROVIDER or codex).")
@@ -302,7 +329,8 @@ def campaign_run(repo: str, campaign_id: str, runs: int, max_tokens: int | None,
                  reasoning_effort: str | None,
                  target_url: str | None, target_creds: tuple[str, ...],
                  scope_notes_path: str | None,
-                 config_path: str | None, provider: str | None,
+                 config_path: str | None, scratch_dir: str | None,
+                 reports_dir: str | None, provider: str | None,
                  allow_api_key: bool) -> None:
     """Run the full 8-stage pipeline repeatedly with shared campaign memory."""
     allow = _allow_api_key_from_env_or_flag(allow_api_key)
@@ -348,6 +376,8 @@ def campaign_run(repo: str, campaign_id: str, runs: int, max_tokens: int | None,
         console.print(f"[cyan]scope notes loaded:[/cyan] {scope_notes_path} ({len(scope_notes)} chars)")
 
     repo_path = Path(repo).resolve()
+    resolved_reports_root = _reports_root(reports_dir)
+    resolved_scratch_root = _scratch_root(scratch_dir)
     db = _open_state_db_or_exit()
     try:
         report = asyncio.run(run_campaign(
@@ -362,7 +392,8 @@ def campaign_run(repo: str, campaign_id: str, runs: int, max_tokens: int | None,
             max_recon_tasks=max_recon_tasks,
             live_target=live_target,
             scope_notes=scope_notes,
-            results_root=RESULTS_ROOT,
+            results_root=resolved_reports_root,
+            scratch_root=resolved_scratch_root,
         ))
         row = db.get_campaign(campaign_id)
         stop_reason = row["stop_reason"] if row else "unknown"
@@ -402,9 +433,14 @@ def campaign_status(campaign_id: str | None) -> None:
 @campaign_cmd.command("report")
 @click.option("--campaign-id", required=True)
 @click.option("--format", "fmt", type=click.Choice(["json", "md"]), default="json")
-def campaign_report(campaign_id: str, fmt: str) -> None:
+@click.option("--reports-dir", default=None, type=click.Path(file_okay=False),
+              help="Override reports directory.")
+def campaign_report(campaign_id: str, fmt: str, reports_dir: str | None) -> None:
     """Print the consolidated campaign report."""
-    report_path = RESULTS_ROOT / campaign_id / "campaign" / "report.json"
+    root = _reports_root(reports_dir)
+    report_path = root / campaign_id / "campaign.report.json"
+    if not report_path.exists():
+        report_path = root / campaign_id / "campaign" / "report.json"
     if not report_path.exists():
         console.print(f"[red]no campaign report at {report_path}[/red]")
         sys.exit(1)
@@ -440,22 +476,27 @@ def db_cmd() -> None:
 
 @db_cmd.command("reset")
 @click.option("--results", "wipe_results", is_flag=True,
-              help="Also remove the results/ directory.")
+              help="Also remove the reports directory.")
 @click.option("--work", "wipe_work", is_flag=True,
-              help="Also remove the work/ directory.")
+              help="Also remove scratch work directories.")
+@click.option("--scratch", "wipe_scratch", is_flag=True,
+              help="Also remove the entire scratch directory.")
 @click.option("--all", "wipe_all", is_flag=True,
-              help="Remove state.db, results/, and work/.")
+              help="Remove state.db, reports, and scratch work.")
 @click.option("--yes", is_flag=True,
               help="Do not prompt before deleting files.")
 @click.option("--dry-run", is_flag=True,
               help="Print what would be removed without deleting anything.")
-def db_reset(wipe_results: bool, wipe_work: bool, wipe_all: bool,
+def db_reset(wipe_results: bool, wipe_work: bool, wipe_scratch: bool, wipe_all: bool,
              yes: bool, dry_run: bool) -> None:
     """Reset local run state so future audits start from a fresh database."""
     targets = [DB_PATH]
     if wipe_results or wipe_all:
         targets.append(RESULTS_ROOT)
+    if wipe_scratch:
+        targets.append(SCRATCH_ROOT)
     if wipe_work or wipe_all:
+        targets.append(SCRATCH_ROOT / "work")
         targets.append(REPO_ROOT / "work")
 
     existing = [p for p in targets if p.exists()]
@@ -482,9 +523,14 @@ def db_reset(wipe_results: bool, wipe_work: bool, wipe_all: bool,
 @main.command("report")
 @click.option("--run-id", required=True)
 @click.option("--format", "fmt", type=click.Choice(["json", "md"]), default="json")
-def report(run_id: str, fmt: str) -> None:
+@click.option("--reports-dir", default=None, type=click.Path(file_okay=False),
+              help="Override reports directory.")
+def report(run_id: str, fmt: str, reports_dir: str | None) -> None:
     """Print (or generate) the final report."""
-    report_path = RESULTS_ROOT / run_id / "report" / "report.json"
+    root = _reports_root(reports_dir)
+    report_path = root / run_id / "vuln-hunter.report.json"
+    if not report_path.exists():
+        report_path = root / run_id / "report" / "report.json"
     if not report_path.exists():
         console.print(f"[red]no report at {report_path}[/red]")
         sys.exit(1)

@@ -1,0 +1,15 @@
+/bin/*
+!/bin/.gitkeep
+
+/scratch/*
+!/scratch/.gitkeep
+
+/reports/*
+!/reports/.gitkeep
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/

@@ -148,6 +148,44 @@ def test_run_reasoning_effort_overrides_all_stages(tmp_path, monkeypatch):
     assert "set reasoning effort to high" in result.output
 
 
+def test_run_forwards_report_and_scratch_roots(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    repo = tmp_path / "repo"
+    reports = tmp_path / "custom-reports"
+    scratch = tmp_path / "custom-scratch"
+    report = reports / "path-run" / "vuln-hunter.report.json"
+    repo.mkdir()
+    captured = {}
+
+    monkeypatch.setattr(cli, "DB_PATH", db_path)
+    monkeypatch.setattr(cli, "configure_auth", lambda **kwargs: object())
+
+    async def fake_run_pipeline(**kwargs):
+        captured.update(kwargs)
+        return report
+
+    monkeypatch.setattr(cli, "run_pipeline", fake_run_pipeline)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "run",
+            "--repo",
+            str(repo),
+            "--run-id",
+            "path-run",
+            "--reports-dir",
+            str(reports),
+            "--scratch-dir",
+            str(scratch),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["reports_root"] == reports.resolve()
+    assert captured["scratch_root"] == scratch.resolve()
+
+
 def test_run_rejects_invalid_reasoning_effort(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
