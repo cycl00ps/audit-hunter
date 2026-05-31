@@ -1,5 +1,7 @@
 # audit-hunter
 
+<img src="assets/audit-hunter.jpg" alt="audit-hunter logo" align="right" width="180">
+
 `audit-hunter` is a security-audit toolkit with two focused tools:
 
 - `threat-model/` maps a repository before testing. It explains what the
