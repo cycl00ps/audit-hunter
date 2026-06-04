@@ -32,11 +32,15 @@ async def run_pipeline(
     max_recon_tasks: int | None = None,
     live_target: dict | None = None,
     scope_notes: str | None = None,
+    reports_root: Path | None = None,
+    scratch_root: Path | None = None,
 ) -> Path:
     ctx = StageContext(
         run_id=run_id,
         repo_path=repo_path.resolve(),
         config=config,
+        reports_root=reports_root,
+        scratch_root=scratch_root,
         live_target=live_target,
         scope_notes=scope_notes,
     )

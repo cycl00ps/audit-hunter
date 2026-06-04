@@ -43,6 +43,7 @@ async def run_campaign(
     live_target: dict | None = None,
     scope_notes: str | None = None,
     results_root: Path = DEFAULT_RESULTS_ROOT,
+    scratch_root: Path | None = None,
 ) -> Path:
     """Run the existing pipeline repeatedly with shared campaign memory."""
     repo_path = repo_path.resolve()
@@ -103,6 +104,8 @@ async def run_campaign(
                     max_recon_tasks=max_recon_tasks,
                     live_target=live_target,
                     scope_notes=child_scope_notes,
+                    reports_root=results_root,
+                    scratch_root=scratch_root,
                 )
             except CostExceeded:
                 new_count = count_new_reachable_issues(db, child_run_id, seen_issue_keys)
@@ -283,9 +286,9 @@ def write_campaign_report(
     if errors:
         raise ValueError(f"invalid campaign report: {errors}")
 
-    out_dir = results_root / campaign_id / "campaign"
+    out_dir = results_root / campaign_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "report.json"
+    out_path = out_dir / "campaign.report.json"
     out_path.write_text(json.dumps(payload, indent=2))
     return out_path
 
@@ -301,7 +304,9 @@ def merge_campaign_reports(
     order = 0
 
     for child_run_id in child_run_ids:
-        report_path = results_root / child_run_id / "report" / "report.json"
+        report_path = results_root / child_run_id / "vuln-hunter.report.json"
+        if not report_path.exists():
+            report_path = results_root / child_run_id / "report" / "report.json"
         if not report_path.exists():
             continue
         report = json.loads(report_path.read_text())

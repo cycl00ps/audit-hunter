@@ -64,12 +64,12 @@ export OPENAI_API_KEY="sk-..."
 printenv OPENAI_API_KEY | codex login --with-api-key
 
 # 3. Verify
-uv run audit auth-check
+uv run vuln-hunter auth-check
 
 # 4. Run
-uv run audit run --repo /path/to/target --run-id my-run
-uv run audit status --run-id my-run
-uv run audit report --run-id my-run --format md > report.md
+uv run vuln-hunter run --repo /path/to/target --run-id my-run
+uv run vuln-hunter status --run-id my-run
+uv run vuln-hunter report --run-id my-run --format md > report.md
 ```
 
 By default the agent runs `codex exec` subprocesses and authenticates with
@@ -79,9 +79,9 @@ printed or persisted by this project.
 To start from a clean run database, use:
 
 ```bash
-uv run audit db reset --yes              # remove state.db only
-uv run audit db reset --yes --all        # also remove results/ and work/
-uv run audit db reset --all --dry-run    # preview cleanup targets
+uv run vuln-hunter db reset --yes              # remove state.db only
+uv run vuln-hunter db reset --yes --all        # also remove reports and scratch work
+uv run vuln-hunter db reset --all --dry-run    # preview cleanup targets
 ```
 
 ## Using a different model / provider
@@ -90,8 +90,8 @@ uv run audit db reset --all --dry-run    # preview cleanup targets
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-uv run audit auth-check
-uv run audit run --repo /path/to/target --run-id codex-run --max-tokens 200000
+uv run vuln-hunter auth-check
+uv run vuln-hunter run --repo /path/to/target --run-id codex-run --max-tokens 200000
 ```
 
 Edit `config/stages.yaml` to change the per-stage Codex/OpenAI models and
@@ -106,8 +106,8 @@ The previous Claude Code SDK path is preserved for users who want it:
 
 ```bash
 claude login
-uv run audit auth-check --provider claude
-uv run audit run --provider claude --repo /path/to/target --run-id crun
+uv run vuln-hunter auth-check --provider claude
+uv run vuln-hunter run --provider claude --repo /path/to/target --run-id crun
 ```
 
 Claude gateway, OAuth-token, and metered `ANTHROPIC_API_KEY` modes still
@@ -122,7 +122,7 @@ validate. At default concurrency this can burn through a lot of tokens. Flags
 to keep it bounded:
 
 ```bash
-uv run audit run --repo /path/to/target \
+uv run vuln-hunter run --repo /path/to/target \
   --max-concurrency 1 \           # one agent subprocess at a time
   --max-recon-tasks 15 \          # cap initial Hunt fanout
   --max-tokens 200000             # abort cleanly if exceeded
@@ -142,7 +142,7 @@ a local PoC, Validate **rejects** findings that don't reproduce, and Trace
 remains available — these flags are opt-in.
 
 ```bash
-uv run audit run --repo /path/to/target --run-id live \
+uv run vuln-hunter run --repo /path/to/target --run-id live \
   --max-concurrency 1 --max-tokens 200000 \
   --target-url http://server.local:8888 \
   --target-creds email=admin@system.com \
@@ -165,7 +165,7 @@ notes are appended verbatim to every stage's user_input, and Recon / Hunt /
 Validate honor exclusions you list.
 
 ```bash
-uv run audit run --repo /path/to/target --scope-notes target_scope.md
+uv run vuln-hunter run --repo /path/to/target --scope-notes target_scope.md
 ```
 
 Example `target_scope.md`:
@@ -206,8 +206,8 @@ audit/          Python package
   runner.py     Codex CLI / Claude SDK runner with schema validation + repair turn
   orchestrator.py pipeline driver
   stages/       one module per stage
-work/           per-Hunt-task scratch dirs (sandbox for PoC compile/run)
-results/        JSONL artifacts per stage + final report.json
+../scratch/     per-Hunt-task scratch dirs + raw JSONL artifacts
+../reports/     final vuln-hunter.report.json and campaign.report.json
 state.db        SQLite (gitignored)
 ```
 
@@ -220,8 +220,10 @@ malicious build scripts could otherwise execute on your host during PoC
 compilation.
 
 The agent reads everything you `--add-dir`, including any `.env` or
-`secrets/` directories in the target. Outputs land in `results/<run-id>/`
-which is `.gitignore`d but **not** scrubbed of those reads.
+`secrets/` directories in the target. Raw outputs land in
+`../scratch/artifacts/<run-id>/vuln-hunter/`; final reports land in
+`../reports/<run-id>/`. These locations are ignored by git but **not** scrubbed
+of those reads.
 
 ## License
 

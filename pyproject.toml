@@ -3,35 +3,33 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "audit"
+name = "audit-hunter"
 version = "0.1.0"
-description = "Cloudflare-style 8-stage vulnerability discovery audit agent driven by Codex CLI by default"
+description = "Shared audit-hunter entrypoints and secret scanning"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "claude-agent-sdk>=0.0.20",
     "click>=8.1",
-    "pydantic>=2.6",
     "jsonschema>=4.21",
-    "pyyaml>=6.0",
-    "python-dotenv>=1.0",
     "rich>=13.7",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
 ]
 
 [project.scripts]
-audit = "audit.cli:main"
-vuln-hunter = "audit.cli:main"
+audit-hunter = "audit_hunter.cli:main"
+secret-hunter = "secret_hunter.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["audit*"]
+include = ["audit_hunter*", "audit_hunter_common*", "secret_hunter*"]
+
+[tool.setuptools.package-data]
+audit_hunter = ["schemas/*.schema.json"]
+secret_hunter = ["schemas/*.schema.json"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "secret_hunter/tests"]

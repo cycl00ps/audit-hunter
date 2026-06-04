@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from audit.config import HarnessConfig, StageConfig
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-PROMPTS = REPO_ROOT / "prompts"
-SCHEMAS = REPO_ROOT / "schemas"
-RESULTS = REPO_ROOT / "results"
-WORK = REPO_ROOT / "work"
+TOOL_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = TOOL_ROOT.parent
+PROMPTS = TOOL_ROOT / "prompts"
+SCHEMAS = TOOL_ROOT / "schemas"
+REPORTS = Path(os.environ.get("AUDIT_REPORTS_DIR") or PROJECT_ROOT / "reports").expanduser().resolve()
+SCRATCH = Path(os.environ.get("AUDIT_SCRATCH_DIR") or PROJECT_ROOT / "scratch").expanduser().resolve()
+RESULTS = REPORTS
+ARTIFACTS = SCRATCH / "artifacts"
+WORK = SCRATCH / "work"
 
 
 @dataclass
@@ -20,6 +25,8 @@ class StageContext:
     run_id: str
     repo_path: Path
     config: HarnessConfig
+    reports_root: Path | None = None
+    scratch_root: Path | None = None
     # Optional operator context — when set, downstream prompts use them.
     live_target: dict | None = None    # {"url": "...", "credentials": {...}}
     scope_notes: str | None = None     # verbatim text appended to user_input
@@ -49,14 +56,35 @@ class StageContext:
         return path
 
     def results_dir(self, stage: str) -> Path:
-        d = RESULTS / self.run_id / stage
+        d = self.artifacts_root / self.run_id / "vuln-hunter" / stage
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     def work_dir(self, stage: str, ref: str | None = None) -> Path:
-        d = WORK / self.run_id / stage / (ref or "default")
+        d = self.work_root / self.run_id / stage / (ref or "default")
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    @property
+    def resolved_reports_root(self) -> Path:
+        return (self.reports_root or REPORTS).expanduser().resolve()
+
+    @property
+    def resolved_scratch_root(self) -> Path:
+        return (self.scratch_root or SCRATCH).expanduser().resolve()
+
+    @property
+    def artifacts_root(self) -> Path:
+        return self.resolved_scratch_root / "artifacts"
+
+    @property
+    def work_root(self) -> Path:
+        return self.resolved_scratch_root / "work"
+
+    def report_path(self) -> Path:
+        d = self.resolved_reports_root / self.run_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "vuln-hunter.report.json"
 
 
 def truncated_recon_summary(full: dict, subsystem_filter: str | None = None) -> dict:
