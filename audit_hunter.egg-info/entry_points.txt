@@ -1,3 +1,0 @@
-[console_scripts]
-audit-hunter = audit_hunter.cli:main
-secret-hunter = secret_hunter.cli:main

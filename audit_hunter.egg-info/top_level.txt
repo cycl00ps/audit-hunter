@@ -1,3 +1,0 @@
-audit_hunter
-audit_hunter_common
-secret_hunter

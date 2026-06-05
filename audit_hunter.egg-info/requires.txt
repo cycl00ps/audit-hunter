@@ -1,6 +1,0 @@
-click>=8.1
-jsonschema>=4.21
-rich>=13.7
-
-[dev]
-pytest>=8.0
