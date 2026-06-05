@@ -42,11 +42,18 @@ async def run_campaign(
     max_recon_tasks: int | None = None,
     live_target: dict | None = None,
     scope_notes: str | None = None,
+    targeted_scope_notes: str | None = None,
+    targeted_scope_runs: int = 0,
     results_root: Path = DEFAULT_RESULTS_ROOT,
     scratch_root: Path | None = None,
 ) -> Path:
     """Run the existing pipeline repeatedly with shared campaign memory."""
     repo_path = repo_path.resolve()
+    if targeted_scope_runs < 0:
+        raise ValueError("targeted_scope_runs must be >= 0")
+    if targeted_scope_runs > runs:
+        raise ValueError("targeted_scope_runs cannot exceed requested runs")
+
     seeds = list(dict.fromkeys(seed_run_ids))
     db.create_campaign(
         campaign_id=campaign_id,
@@ -82,8 +89,12 @@ async def run_campaign(
 
             db.start_campaign_run(campaign_id, child_run_id, run_index)
             child_run_ids.append(child_run_id)
+            child_base_scope = combine_scope_notes(
+                targeted_scope_notes if run_index <= targeted_scope_runs else None,
+                scope_notes,
+            )
             child_scope_notes = append_campaign_ledger(
-                scope_notes, build_memory_ledger(db, prior_run_ids)
+                child_base_scope, build_memory_ledger(db, prior_run_ids)
             )
 
             log.info(
@@ -174,6 +185,13 @@ def append_campaign_ledger(scope_notes: str | None, ledger: str) -> str | None:
     if not scope_notes:
         return ledger
     return f"{scope_notes.rstrip()}\n\n---\n\n{ledger}"
+
+
+def combine_scope_notes(*parts: str | None) -> str | None:
+    cleaned = [part.strip() for part in parts if part and part.strip()]
+    if not cleaned:
+        return None
+    return "\n\n---\n\n".join(cleaned)
 
 
 def build_memory_ledger(

@@ -323,6 +323,76 @@ async def test_campaign_imports_seed_findings_into_first_scope_notes(
         db.close()
 
 
+@pytest.mark.asyncio
+async def test_campaign_applies_targeted_scope_only_to_initial_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = StateDB(tmp_path / "state.db")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    captured: list[str] = []
+
+    async def fake_run_pipeline(*, repo_path, run_id, db, scope_notes, **kwargs):
+        captured.append(scope_notes or "")
+        db.create_run(str(repo_path), run_id)
+        return tmp_path / "unused.json"
+
+    monkeypatch.setattr(campaign, "run_pipeline", fake_run_pipeline)
+
+    try:
+        await campaign.run_campaign(
+            repo_path=repo,
+            campaign_id="camp",
+            runs=3,
+            max_tokens=100,
+            stop_after_empty=5,
+            seed_run_ids=[],
+            db=db,
+            config=HarnessConfig(),
+            scope_notes="operator scope",
+            targeted_scope_notes="generated threat scope",
+            targeted_scope_runs=2,
+            results_root=tmp_path / "results",
+        )
+
+        assert len(captured) == 3
+        assert "generated threat scope" in captured[0]
+        assert "operator scope" in captured[0]
+        assert "generated threat scope" in captured[1]
+        assert "operator scope" in captured[1]
+        assert "generated threat scope" not in captured[2]
+        assert "operator scope" in captured[2]
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_campaign_rejects_targeted_scope_runs_above_requested_runs(
+    tmp_path: Path,
+) -> None:
+    db = StateDB(tmp_path / "state.db")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    try:
+        with pytest.raises(ValueError, match="cannot exceed requested runs"):
+            await campaign.run_campaign(
+                repo_path=repo,
+                campaign_id="camp",
+                runs=2,
+                max_tokens=100,
+                stop_after_empty=5,
+                seed_run_ids=[],
+                db=db,
+                config=HarnessConfig(),
+                targeted_scope_notes="generated threat scope",
+                targeted_scope_runs=3,
+                results_root=tmp_path / "results",
+            )
+    finally:
+        db.close()
+
+
 def _report_finding(
     finding_id: str,
     *,
