@@ -1,3 +1,18 @@
+Metadata-Version: 2.4
+Name: audit-hunter
+Version: 0.1.0
+Summary: Shared audit-hunter entrypoints and secret scanning
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: click>=8.1
+Requires-Dist: jsonschema>=4.21
+Requires-Dist: rich>=13.7
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Dynamic: license-file
+
 # audit-hunter
 
 <img src="assets/audit-hunter.jpg" alt="audit-hunter logo" align="right" width="180">
@@ -28,7 +43,7 @@ secret or vulnerability scanning logic.
 and matching security configuration for already-cloned local repositories:
 
 ```bash
-uv run --locked audit-hunter threat-model --repo /path/to/target --run-id my-run
+uv run audit-hunter threat-model --repo /path/to/target --run-id my-run
 ```
 
 It inspects:
@@ -96,8 +111,8 @@ provider, model, and safety documentation.
 top-level `bin/` or make them available on `PATH`:
 
 ```bash
-uv sync --locked --extra dev
-uv run --locked secret-hunter scan --repo /path/to/target --run-id my-run
+uv sync --extra dev
+uv run secret-hunter scan --repo /path/to/target --run-id my-run
 ```
 
 Raw scanner outputs are written under `scratch/artifacts/<run-id>/secret-hunter/`.
@@ -109,7 +124,7 @@ The final normalized report is written to
 The master entrypoint provides one-shot orchestration and report combination:
 
 ```bash
-uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
+uv run audit-hunter assess --repo /path/to/target --run-id my-run \
   --max-concurrency 1 \
   --max-recon-tasks 15 \
   --max-tokens 200000
@@ -125,48 +140,23 @@ uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
 4. Run existing `vuln-hunter run` with the generated scope notes.
 5. Combine per-tool JSON reports.
 
-By default the vulnerability step is a single `vuln-hunter run`. To run a
-campaign through the one-shot flow:
-
-```bash
-uv run --locked audit-hunter assess --repo /path/to/target --run-id my-campaign \
-  --vuln-mode campaign \
-  --runs 5 \
-  --stop-after-empty 2 \
-  --max-tokens 500000
-```
-
-In campaign mode, generated threat-model targeting is applied only to the
-first vuln child run by default. Control that with `--threat-scope-runs`:
-
-```bash
---threat-scope-runs 0   # no generated threat targeting
---threat-scope-runs 1   # first run only, default
---threat-scope-runs 3   # first three child runs
-```
-
-User-provided `--scope-notes` are still passed as general scope/exclusion
-notes for the whole vuln run or campaign.
-
 If threat artifacts already exist in the target repo, reuse them:
 
 ```bash
-uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
+uv run audit-hunter assess --repo /path/to/target --run-id my-run \
   --skip-threat-model
 ```
 
 The generated vulnerability scope file is written under
-`scratch/artifacts/<run-id>/audit-hunter/`. In single-run mode, user
-`--scope-notes` are appended to the generated threat context. In campaign mode,
-generated threat context is passed as targeted scope for the first
-`--threat-scope-runs` child runs, while user `--scope-notes` apply to every
-child run.
+`scratch/artifacts/<run-id>/audit-hunter/vuln-scope-notes.md`. If you pass
+`--scope-notes`, those user notes are appended after the generated threat
+context and the combined file is passed to `vuln-hunter run --scope-notes`.
 
 You can still combine existing reports manually:
 
 ```bash
-uv sync --locked --extra dev
-uv run --locked audit-hunter combine --run-id my-run
+uv sync --extra dev
+uv run audit-hunter combine --run-id my-run
 ```
 
 This writes `reports/<run-id>/audit-hunter.report.json` from the per-tool
@@ -177,41 +167,30 @@ reports already present in that run directory.
 Install the top-level tools:
 
 ```bash
-uv sync --locked --extra dev
+uv sync --extra dev
 ```
 
 Install the nested vulnerability hunter environment:
 
 ```bash
-uv sync --project vuln-hunter --locked --extra dev
+uv sync --project vuln-hunter --extra dev
 ```
 
 Configure Codex/OpenAI auth for vulnerability hunting:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-uv run --project vuln-hunter --locked vuln-hunter auth-check
+uv run --project vuln-hunter vuln-hunter auth-check
 ```
 
 Put `trufflehog` and/or `gitleaks` in top-level `bin/` or make them available
 on `PATH`, then run a bounded one-shot assessment:
 
 ```bash
-uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
+uv run audit-hunter assess --repo /path/to/target --run-id my-run \
   --max-concurrency 1 \
   --max-recon-tasks 15 \
   --max-tokens 200000
-```
-
-For repeated vuln hunting with the same one-shot setup:
-
-```bash
-uv run --locked audit-hunter assess --repo /path/to/target --run-id my-campaign \
-  --vuln-mode campaign \
-  --runs 5 \
-  --threat-scope-runs 1 \
-  --stop-after-empty 2 \
-  --max-tokens 500000
 ```
 
 Primary outputs:
@@ -222,10 +201,9 @@ Primary outputs:
 reports/<run-id>/threat-model.md
 reports/<run-id>/security-config.json
 reports/<run-id>/secret-hunter.report.json
-reports/<run-id>/vuln-hunter.report.json       # single-run mode
-reports/<run-id>/campaign.report.json          # campaign mode
+reports/<run-id>/vuln-hunter.report.json
 reports/<run-id>/audit-hunter.report.json
-scratch/artifacts/<run-id>/audit-hunter/*.md
+scratch/artifacts/<run-id>/audit-hunter/vuln-scope-notes.md
 ```
 
 Use `--skip-threat-model` when `.audit-hunter/threat-model.md` and
@@ -236,7 +214,7 @@ Use `--skip-threat-model` when `.audit-hunter/threat-model.md` and
 1. Generate the threat model against the target repo:
 
    ```bash
-   uv run --locked audit-hunter threat-model --repo /path/to/target --run-id my-run
+   uv run audit-hunter threat-model --repo /path/to/target --run-id my-run
    ```
 
 2. Review the generated files in the target repo:
@@ -259,46 +237,46 @@ Install the CLI from the `vuln-hunter/` directory:
 
 ```bash
 cd vuln-hunter
-uv sync --locked --extra dev
+uv sync --extra dev
 ```
 
 Configure authentication for Codex/OpenAI:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-uv run --locked vuln-hunter auth-check
+uv run vuln-hunter auth-check
 ```
 
 Run a one-off audit:
 
 ```bash
-uv run --locked vuln-hunter run --repo /path/to/target --run-id my-run \
+uv run vuln-hunter run --repo /path/to/target --run-id my-run \
   --max-concurrency 1 \
   --max-recon-tasks 15 \
   --max-tokens 200000
 
-uv run --locked vuln-hunter status --run-id my-run
-uv run --locked vuln-hunter report --run-id my-run --format md > report.md
+uv run vuln-hunter status --run-id my-run
+uv run vuln-hunter report --run-id my-run --format md > report.md
 ```
 
 Run a campaign:
 
 ```bash
-uv run --locked vuln-hunter campaign run --repo /path/to/target \
+uv run vuln-hunter campaign run --repo /path/to/target \
   --campaign-id my-campaign \
   --runs 5 \
   --stop-after-empty 2 \
   --max-tokens 500000
 
-uv run --locked vuln-hunter campaign status --campaign-id my-campaign
-uv run --locked vuln-hunter campaign report --campaign-id my-campaign --format md > campaign-report.md
+uv run vuln-hunter campaign status --campaign-id my-campaign
+uv run vuln-hunter campaign report --campaign-id my-campaign --format md > campaign-report.md
 ```
 
 Pass scope notes when the threat-model review identifies exclusions or
 priorities:
 
 ```bash
-uv run --locked vuln-hunter run --repo /path/to/target \
+uv run vuln-hunter run --repo /path/to/target \
   --run-id scoped-run \
   --scope-notes /path/to/scope-notes.md
 ```
@@ -307,7 +285,7 @@ If a live deployment is available, `vuln-hunter` can ask agents to reproduce
 findings against it:
 
 ```bash
-uv run --locked vuln-hunter run --repo /path/to/target --run-id live \
+uv run vuln-hunter run --repo /path/to/target --run-id live \
   --target-url http://server.local:8888 \
   --target-creds email=admin@example.com \
   --target-creds password=change-me \

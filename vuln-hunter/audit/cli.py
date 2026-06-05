@@ -311,6 +311,14 @@ def campaign_cmd() -> None:
 @click.option("--scope-notes", "scope_notes_path", default=None,
               type=click.Path(exists=True, dir_okay=False),
               help="Optional: path to target-specific scope rules / exclusions.")
+@click.option("--targeted-scope-notes", "targeted_scope_notes_path", default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help="Optional: path to scope notes applied only to the first "
+                   "--targeted-scope-runs child runs.")
+@click.option("--targeted-scope-runs", default=0, show_default=True,
+              type=click.IntRange(min=0),
+              help="Number of initial campaign child runs that receive "
+                   "--targeted-scope-notes.")
 @click.option("--config", "config_path", default=None, type=click.Path(),
               help="Override config/stages.yaml.")
 @click.option("--scratch-dir", default=None, type=click.Path(file_okay=False),
@@ -329,10 +337,14 @@ def campaign_run(repo: str, campaign_id: str, runs: int, max_tokens: int | None,
                  reasoning_effort: str | None,
                  target_url: str | None, target_creds: tuple[str, ...],
                  scope_notes_path: str | None,
+                 targeted_scope_notes_path: str | None, targeted_scope_runs: int,
                  config_path: str | None, scratch_dir: str | None,
                  reports_dir: str | None, provider: str | None,
                  allow_api_key: bool) -> None:
     """Run the full 8-stage pipeline repeatedly with shared campaign memory."""
+    if targeted_scope_runs > runs:
+        raise click.UsageError("--targeted-scope-runs cannot exceed --runs.")
+
     allow = _allow_api_key_from_env_or_flag(allow_api_key)
     selected_provider, provider_explicit = _provider_from_env_or_flag(provider)
     try:
@@ -375,6 +387,14 @@ def campaign_run(repo: str, campaign_id: str, runs: int, max_tokens: int | None,
         scope_notes = Path(scope_notes_path).read_text()
         console.print(f"[cyan]scope notes loaded:[/cyan] {scope_notes_path} ({len(scope_notes)} chars)")
 
+    targeted_scope_notes: str | None = None
+    if targeted_scope_notes_path:
+        targeted_scope_notes = Path(targeted_scope_notes_path).read_text()
+        console.print(
+            f"[cyan]targeted scope notes loaded:[/cyan] {targeted_scope_notes_path} "
+            f"({len(targeted_scope_notes)} chars for first {targeted_scope_runs} runs)"
+        )
+
     repo_path = Path(repo).resolve()
     resolved_reports_root = _reports_root(reports_dir)
     resolved_scratch_root = _scratch_root(scratch_dir)
@@ -392,6 +412,8 @@ def campaign_run(repo: str, campaign_id: str, runs: int, max_tokens: int | None,
             max_recon_tasks=max_recon_tasks,
             live_target=live_target,
             scope_notes=scope_notes,
+            targeted_scope_notes=targeted_scope_notes,
+            targeted_scope_runs=targeted_scope_runs,
             results_root=resolved_reports_root,
             scratch_root=resolved_scratch_root,
         ))

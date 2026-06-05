@@ -210,8 +210,10 @@ def test_campaign_run_parses_and_forwards_options(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     report = tmp_path / "results" / "camp" / "campaign" / "report.json"
     scope = tmp_path / "scope.txt"
+    targeted_scope = tmp_path / "targeted-scope.txt"
     repo.mkdir()
     scope.write_text("stay in scope")
+    targeted_scope.write_text("start with threat model")
     captured = {}
 
     monkeypatch.setattr(cli, "DB_PATH", db_path)
@@ -255,6 +257,10 @@ def test_campaign_run_parses_and_forwards_options(tmp_path, monkeypatch):
             "email=a@example.com",
             "--scope-notes",
             str(scope),
+            "--targeted-scope-notes",
+            str(targeted_scope),
+            "--targeted-scope-runs",
+            "2",
         ],
     )
 
@@ -271,6 +277,8 @@ def test_campaign_run_parses_and_forwards_options(tmp_path, monkeypatch):
         "credentials": {"email": "a@example.com"},
     }
     assert captured["scope_notes"] == "stay in scope"
+    assert captured["targeted_scope_notes"] == "start with threat model"
+    assert captured["targeted_scope_runs"] == 2
     assert captured["results_root"] == tmp_path / "results"
     assert {sc.concurrency for sc in captured["config"].stages.values()} == {1}
     assert {sc.reasoning_effort for sc in captured["config"].stages.values()} == {"low"}

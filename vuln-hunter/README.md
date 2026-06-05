@@ -55,7 +55,7 @@ every output is shape-stable on the first try.
 
 ```bash
 # 1. Install
-uv sync --extra dev
+uv sync --locked --extra dev
 
 # 2. Auth (pick one)
 #    (a) Use the OpenAI API key already in your shell:
@@ -64,12 +64,12 @@ export OPENAI_API_KEY="sk-..."
 printenv OPENAI_API_KEY | codex login --with-api-key
 
 # 3. Verify
-uv run vuln-hunter auth-check
+uv run --locked vuln-hunter auth-check
 
 # 4. Run
-uv run vuln-hunter run --repo /path/to/target --run-id my-run
-uv run vuln-hunter status --run-id my-run
-uv run vuln-hunter report --run-id my-run --format md > report.md
+uv run --locked vuln-hunter run --repo /path/to/target --run-id my-run
+uv run --locked vuln-hunter status --run-id my-run
+uv run --locked vuln-hunter report --run-id my-run --format md > report.md
 ```
 
 By default the agent runs `codex exec` subprocesses and authenticates with
@@ -79,9 +79,9 @@ printed or persisted by this project.
 To start from a clean run database, use:
 
 ```bash
-uv run vuln-hunter db reset --yes              # remove state.db only
-uv run vuln-hunter db reset --yes --all        # also remove reports and scratch work
-uv run vuln-hunter db reset --all --dry-run    # preview cleanup targets
+uv run --locked vuln-hunter db reset --yes              # remove state.db only
+uv run --locked vuln-hunter db reset --yes --all        # also remove reports and scratch work
+uv run --locked vuln-hunter db reset --all --dry-run    # preview cleanup targets
 ```
 
 ## Using a different model / provider
@@ -90,8 +90,8 @@ uv run vuln-hunter db reset --all --dry-run    # preview cleanup targets
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-uv run vuln-hunter auth-check
-uv run vuln-hunter run --repo /path/to/target --run-id codex-run --max-tokens 200000
+uv run --locked vuln-hunter auth-check
+uv run --locked vuln-hunter run --repo /path/to/target --run-id codex-run --max-tokens 200000
 ```
 
 Edit `config/stages.yaml` to change the per-stage Codex/OpenAI models and
@@ -106,8 +106,8 @@ The previous Claude Code SDK path is preserved for users who want it:
 
 ```bash
 claude login
-uv run vuln-hunter auth-check --provider claude
-uv run vuln-hunter run --provider claude --repo /path/to/target --run-id crun
+uv run --locked vuln-hunter auth-check --provider claude
+uv run --locked vuln-hunter run --provider claude --repo /path/to/target --run-id crun
 ```
 
 Claude gateway, OAuth-token, and metered `ANTHROPIC_API_KEY` modes still
@@ -122,7 +122,7 @@ validate. At default concurrency this can burn through a lot of tokens. Flags
 to keep it bounded:
 
 ```bash
-uv run vuln-hunter run --repo /path/to/target \
+uv run --locked vuln-hunter run --repo /path/to/target \
   --max-concurrency 1 \           # one agent subprocess at a time
   --max-recon-tasks 15 \          # cap initial Hunt fanout
   --max-tokens 200000             # abort cleanly if exceeded
@@ -142,7 +142,7 @@ a local PoC, Validate **rejects** findings that don't reproduce, and Trace
 remains available — these flags are opt-in.
 
 ```bash
-uv run vuln-hunter run --repo /path/to/target --run-id live \
+uv run --locked vuln-hunter run --repo /path/to/target --run-id live \
   --max-concurrency 1 --max-tokens 200000 \
   --target-url http://server.local:8888 \
   --target-creds email=admin@system.com \
@@ -165,7 +165,7 @@ notes are appended verbatim to every stage's user_input, and Recon / Hunt /
 Validate honor exclusions you list.
 
 ```bash
-uv run vuln-hunter run --repo /path/to/target --scope-notes target_scope.md
+uv run --locked vuln-hunter run --repo /path/to/target --scope-notes target_scope.md
 ```
 
 Example `target_scope.md`:
@@ -176,6 +176,22 @@ Example `target_scope.md`:
 - Don't flag rate-limit absence on anonymous /ping endpoints.
 - Only consider critical/high severity.
 ```
+
+Campaigns can also apply one set of notes to every child run and another set
+only to the first N child runs:
+
+```bash
+uv run --locked vuln-hunter campaign run --repo /path/to/target \
+  --campaign-id my-campaign \
+  --runs 5 \
+  --scope-notes general-scope.md \
+  --targeted-scope-notes threat-scope.md \
+  --targeted-scope-runs 1
+```
+
+Use this when an upstream threat model should steer the opening run, while
+later runs mainly follow campaign memory. `--scope-notes` applies to every
+child run; `--targeted-scope-notes` applies only to child runs `1..N`.
 
 ## Recon mines git history
 
