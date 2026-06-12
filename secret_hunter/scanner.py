@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import time
@@ -38,14 +37,22 @@ def scan_repository(
 
     trufflehog = resolve_tool("trufflehog", explicit_path=trufflehog_path, paths=paths)
     trufflehog_artifact = artifact_dir / "trufflehog.ndjson"
-    run = _run_trufflehog(trufflehog, repo_path, trufflehog_artifact, verify=verify)
+    git_repo = _is_git_work_tree(repo_path)
+
+    run = _run_trufflehog(
+        trufflehog,
+        repo_path,
+        trufflehog_artifact,
+        verify=verify,
+        git_repo=git_repo,
+    )
     scanner_runs.append(run)
     if run["status"] == "success":
         raw_findings.extend(parse_trufflehog(trufflehog_artifact))
 
     gitleaks = resolve_tool("gitleaks", explicit_path=gitleaks_path, paths=paths)
     gitleaks_artifact = artifact_dir / "gitleaks.json"
-    run = _run_gitleaks(gitleaks, repo_path, gitleaks_artifact)
+    run = _run_gitleaks(gitleaks, repo_path, gitleaks_artifact, git_repo=git_repo)
     scanner_runs.append(run)
     if run["status"] == "success":
         raw_findings.extend(parse_gitleaks(gitleaks_artifact))
@@ -73,37 +80,22 @@ def scan_repository(
     return out_path
 
 
-def clone_repo(*, repo_url: str, run_id: str, paths: ProjectPaths) -> Path:
-    paths.repos_dir.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", repo_url.rstrip("/").split("/")[-1])
-    if slug.endswith(".git"):
-        slug = slug[:-4]
-    dest = paths.repos_dir / f"{slug or 'repo'}-{run_id}"
-    if dest.exists():
-        raise RuntimeError(f"clone target already exists: {dest}")
-    result = subprocess.run(
-        ["git", "clone", "--depth", "1", repo_url, str(dest)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "git clone failed")
-    return dest.resolve()
-
-
 def _run_trufflehog(
     binary: Path | None,
     repo_path: Path,
     artifact_path: Path,
     *,
     verify: bool,
+    git_repo: bool,
 ) -> dict[str, Any]:
     if binary is None:
         return _scanner_unavailable("trufflehog")
-    cmd = [str(binary), "filesystem", "--json", str(repo_path)]
+    if git_repo:
+        cmd = [str(binary), "git", repo_path.as_uri(), "--json"]
+    else:
+        cmd = [str(binary), "filesystem", "--json", str(repo_path)]
     if not verify:
-        cmd.insert(2, "--no-verification")
+        cmd.append("--no-verification")
     return _run_stdout_scanner(
         scanner="trufflehog",
         cmd=cmd,
@@ -112,21 +104,28 @@ def _run_trufflehog(
     )
 
 
-def _run_gitleaks(binary: Path | None, repo_path: Path, artifact_path: Path) -> dict[str, Any]:
+def _run_gitleaks(
+    binary: Path | None,
+    repo_path: Path,
+    artifact_path: Path,
+    *,
+    git_repo: bool,
+) -> dict[str, Any]:
     if binary is None:
         return _scanner_unavailable("gitleaks")
+    mode = "git" if git_repo else "dir"
     cmd = [
         str(binary),
-        "detect",
-        "--source",
+        mode,
         str(repo_path),
         "--report-format",
         "json",
         "--report-path",
         str(artifact_path),
-        "--redact",
         "--no-banner",
     ]
+    if git_repo:
+        cmd.append("--log-opts=--all")
     return _run_file_scanner(
         scanner="gitleaks",
         cmd=cmd,
@@ -247,7 +246,7 @@ def _summary(findings: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _git_commit(repo_path: Path) -> str | None:
-    if not (repo_path / ".git").exists() or shutil.which("git") is None:
+    if not _is_git_work_tree(repo_path):
         return None
     result = subprocess.run(
         ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
@@ -258,6 +257,18 @@ def _git_commit(repo_path: Path) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def _is_git_work_tree(repo_path: Path) -> bool:
+    if shutil.which("git") is None:
+        return False
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "rev-parse", "--is-inside-work-tree"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def _safe_command(cmd: list[str]) -> list[str]:

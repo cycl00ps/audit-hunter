@@ -93,16 +93,41 @@ provider, model, and safety documentation.
 ### secret-hunter
 
 `secret-hunter` is a standalone scanner wrapper. Put third-party binaries in
-top-level `bin/` or make them available on `PATH`:
+top-level `bin/` or make them available on `PATH`.
+
+Point `--repo` at the local directory to scan. If that directory is a Git
+project, `secret-hunter` scans the refs and history already present in that
+local clone, including fetched remote-tracking branches and tags. It does not
+clone, fetch, unshallow, checkout, or otherwise prepare the target for you.
 
 ```bash
 uv sync --locked --extra dev
 uv run --locked secret-hunter scan --repo /path/to/target --run-id my-run
 ```
 
+For a fresh target clone, prepare the local repository first:
+
+```bash
+git clone --no-single-branch https://github.com/org/project.git /tmp/project
+git -C /tmp/project fetch --all --tags --prune
+uv run --locked secret-hunter scan --repo /tmp/project --run-id my-run
+```
+
+For an existing clone, refresh the refs before scanning if you want the latest
+branch and tag history available locally:
+
+```bash
+git -C /path/to/project fetch --all --tags --prune
+uv run --locked secret-hunter scan --repo /path/to/project --run-id my-run
+```
+
 Raw scanner outputs are written under `scratch/artifacts/<run-id>/secret-hunter/`.
 The final normalized report is written to
-`reports/<run-id>/secret-hunter.report.json`.
+`reports/<run-id>/secret-hunter.report.json`. Final findings are deduped across
+scanners; when TruffleHog and Gitleaks find the same issue, the report includes
+one finding with both tools listed in `sources`. Secret values in the normalized
+report are partially redacted with a short prefix/suffix preview so readers can
+recognize or search for the candidate without exposing the full value.
 
 ### audit-hunter
 
@@ -346,7 +371,9 @@ container when the target source is untrusted.
 `vuln-hunter` and `secret-hunter` read everything made available to them,
 including `.env` or `secrets/` directories in the target. Raw artifacts are
 written under `scratch/`, final reports are written under `reports/`, and
-local vulnerability run state is kept in `vuln-hunter/state.db`.
+local vulnerability run state is kept in `vuln-hunter/state.db`. Treat raw
+scanner artifacts as sensitive; normalized reports redact full secret values,
+but scanner-native output may contain more detail.
 
 ## License
 

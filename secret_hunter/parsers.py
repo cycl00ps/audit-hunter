@@ -11,6 +11,13 @@ from secret_hunter.redaction import redact_evidence, redact_secret
 
 
 SEVERITIES = ("informational", "low", "medium", "high", "critical")
+VERIFICATION_STRENGTH = {
+    "not_supported": 0,
+    "failed": 1,
+    "unknown": 2,
+    "unverified": 3,
+    "verified": 4,
+}
 
 
 def parse_trufflehog(path: Path) -> list[dict[str, Any]]:
@@ -58,7 +65,9 @@ def dedupe_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 current["raw_artifact_paths"].append(artifact)
         current["severity"] = _max_severity(current["severity"], finding["severity"])
         current["confidence"] = max(current["confidence"], finding["confidence"])
-        if current["verification"]["status"] != "verified":
+        if len(finding["redacted_evidence"]) > len(current["redacted_evidence"]):
+            current["redacted_evidence"] = finding["redacted_evidence"]
+        if _verification_rank(finding) > _verification_rank(current):
             current["verification"] = finding["verification"]
 
     for index, finding in enumerate(merged.values(), start=1):
@@ -71,10 +80,11 @@ def _trufflehog_finding(raw: dict[str, Any], index: int, artifact_path: Path) ->
     detector = str(raw.get("DetectorName") or raw.get("DetectorType") or "unknown_secret")
     verified = raw.get("Verified")
     raw_secret = raw.get("Raw") or raw.get("RawV2") or raw.get("Secret")
-    redacted = raw.get("Redacted") or redact_secret(raw_secret)
+    redacted_evidence = redact_secret(raw_secret) if raw_secret else redact_evidence(raw.get("Redacted") or detector)
     source_meta = raw.get("SourceMetadata") or {}
     file_path, line_start, commit = _trufflehog_location(source_meta)
     verification = "verified" if verified is True else "unverified" if verified is False else "unknown"
+    fingerprint = str(raw.get("SourceID") or raw.get("DetectorType") or "")
 
     return _base_finding(
         source="trufflehog",
@@ -84,20 +94,13 @@ def _trufflehog_finding(raw: dict[str, Any], index: int, artifact_path: Path) ->
         file_path=file_path,
         line_start=line_start,
         line_end=line_start,
-        fingerprint=str(raw.get("SourceID") or raw.get("DetectorType") or ""),
-        redacted_evidence=str(redacted),
+        fingerprint=fingerprint,
+        redacted_evidence=redacted_evidence,
         raw_artifact_path=artifact_path,
         commit=commit,
         confidence=0.95 if verified is True else 0.65,
         severity="high" if verified is True else "medium",
-        dedupe_material=json.dumps({
-            "source": "trufflehog",
-            "detector": detector,
-            "file": file_path,
-            "line": line_start,
-            "redacted": redacted,
-            "index": index,
-        }, sort_keys=True),
+        secret_identity=_secret_identity(raw_secret),
     )
 
 
@@ -111,6 +114,7 @@ def _gitleaks_finding(raw: dict[str, Any], index: int, artifact_path: Path) -> d
     fingerprint = str(raw.get("Fingerprint") or "")
     entropy = raw.get("Entropy")
     confidence = 0.7 if _float_or_none(entropy) and float(entropy) >= 3.5 else 0.55
+    redacted_evidence = redact_evidence(match, secret)
 
     return _base_finding(
         source="gitleaks",
@@ -121,20 +125,12 @@ def _gitleaks_finding(raw: dict[str, Any], index: int, artifact_path: Path) -> d
         line_start=line_start,
         line_end=line_end,
         fingerprint=fingerprint,
-        redacted_evidence=redact_evidence(match, secret),
+        redacted_evidence=redacted_evidence,
         raw_artifact_path=artifact_path,
         commit=raw.get("Commit"),
         confidence=confidence,
         severity="medium",
-        dedupe_material=json.dumps({
-            "source": "gitleaks",
-            "fingerprint": fingerprint,
-            "file": file_path,
-            "line": line_start,
-            "detector": detector,
-            "redacted": redact_evidence(match, secret),
-            "index": index,
-        }, sort_keys=True),
+        secret_identity=_secret_identity(secret),
     )
 
 
@@ -153,9 +149,17 @@ def _base_finding(
     commit: object | None,
     confidence: float,
     severity: str,
-    dedupe_material: str,
+    secret_identity: str | None,
 ) -> dict[str, Any]:
-    safe_fingerprint = fingerprint or _hash(dedupe_material)
+    dedupe_key = _dedupe_key(
+        commit=commit,
+        file_path=file_path,
+        line_start=line_start,
+        secret_identity=secret_identity,
+        redacted_evidence=redacted_evidence,
+        fingerprint=fingerprint,
+    )
+    safe_fingerprint = fingerprint or dedupe_key
     return {
         "finding_id": "",
         "title": "",
@@ -179,7 +183,7 @@ def _base_finding(
             "confidence": 0.0,
             "rationale": "AI false-positive analysis was not run.",
         },
-        "_dedupe_key": _hash(dedupe_material),
+        "_dedupe_key": dedupe_key,
     }
 
 
@@ -205,6 +209,56 @@ def _title_for(finding: dict[str, Any]) -> str:
 
 def _max_severity(a: str, b: str) -> str:
     return max((a, b), key=lambda value: SEVERITIES.index(value))
+
+
+def _verification_rank(finding: dict[str, Any]) -> int:
+    return VERIFICATION_STRENGTH.get(finding["verification"]["status"], 0)
+
+
+def _dedupe_key(
+    *,
+    commit: object | None,
+    file_path: str,
+    line_start: int | None,
+    secret_identity: str | None,
+    redacted_evidence: str,
+    fingerprint: str,
+) -> str:
+    material = {
+        "commit": str(commit) if commit else "",
+        "file": file_path,
+        "identity": secret_identity,
+    }
+    if secret_identity is None:
+        material["line"] = line_start
+        material["identity"] = _evidence_identity(redacted_evidence) or _hash(f"fingerprint:{fingerprint}")
+    return _hash(json.dumps(material, sort_keys=True))
+
+
+def _secret_identity(secret: object | None) -> str | None:
+    if secret in (None, ""):
+        return None
+    value = str(secret).strip()
+    if not value:
+        return None
+    if _looks_redacted(value):
+        return None
+    return _hash(f"secret:{value}")
+
+
+def _evidence_identity(evidence: str) -> str | None:
+    value = evidence.strip()
+    if not value or _looks_redacted(value):
+        return None
+    return _hash(f"evidence:{value}")
+
+
+def _looks_redacted(value: str) -> bool:
+    lowered = value.lower()
+    if "redacted" in lowered:
+        return True
+    stripped = value.strip("*xX._- ")
+    return stripped == ""
 
 
 def _hash(value: str) -> str:
