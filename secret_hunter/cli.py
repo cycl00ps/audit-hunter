@@ -10,7 +10,7 @@ import click
 from rich.console import Console
 
 from audit_hunter_common.paths import project_paths
-from secret_hunter.scanner import clone_repo, scan_repository
+from secret_hunter.scanner import scan_repository
 
 
 console = Console()
@@ -22,10 +22,8 @@ def main() -> None:
 
 
 @main.command("scan")
-@click.option("--repo", type=click.Path(exists=True, file_okay=False), default=None,
-              help="Path to the target source-code repo.")
-@click.option("--repo-url", default=None,
-              help="Git URL to clone into scratch/repos before scanning.")
+@click.option("--repo", type=click.Path(exists=True, file_okay=False), required=True,
+              help="Path to the target source-code repo or directory.")
 @click.option("--run-id", default=None, help="Run identifier (default: random).")
 @click.option("--bin-dir", type=click.Path(file_okay=False), default=None,
               help="Directory containing user-managed scanner binaries.")
@@ -42,8 +40,7 @@ def main() -> None:
 @click.option("--verify/--no-verify", default=True,
               help="Allow scanners that support verification to verify candidate secrets.")
 def scan(
-    repo: str | None,
-    repo_url: str | None,
+    repo: str,
     run_id: str | None,
     bin_dir: str | None,
     scratch_dir: str | None,
@@ -54,9 +51,6 @@ def scan(
     verify: bool,
 ) -> None:
     """Run TruffleHog and Gitleaks and write secret-hunter.report.json."""
-    if bool(repo) == bool(repo_url):
-        raise click.UsageError("Pass exactly one of --repo or --repo-url.")
-
     paths = project_paths(
         bin_dir=bin_dir,
         scratch_dir=scratch_dir,
@@ -65,7 +59,7 @@ def scan(
     run_id = run_id or f"secrets_{uuid.uuid4().hex[:8]}"
 
     try:
-        repo_path = clone_repo(repo_url=repo_url, run_id=run_id, paths=paths) if repo_url else Path(repo).resolve()  # type: ignore[arg-type]
+        repo_path = Path(repo).resolve()
         report_path = scan_repository(
             repo_path=repo_path,
             run_id=run_id,
