@@ -13,6 +13,7 @@ from audit_hunter.threat_model import (
     SECURITY_CONFIG_FILENAME,
     THREAT_MODEL_FILENAME,
     ThreatModelArtifacts,
+    ThreatModelOptions,
     ensure_threat_artifacts,
 )
 from audit_hunter_common.paths import PROJECT_ROOT, ProjectPaths
@@ -73,6 +74,7 @@ def run_assessment(
     skip_threat_model: bool,
     secret_options: SecretScanOptions,
     vuln_options: VulnRunOptions,
+    threat_model_options: ThreatModelOptions | None = None,
 ) -> AssessmentResult:
     """Run threat-model, secret-hunter, vuln-hunter, then combine reports."""
     repo_path = repo_path.expanduser().resolve()
@@ -83,6 +85,7 @@ def run_assessment(
         run_id=run_id,
         reports_dir=paths.reports_dir,
         skip_generation=skip_threat_model,
+        options=threat_model_options,
     )
 
     secret_report_path = scan_repository(

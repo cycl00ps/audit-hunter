@@ -1,21 +1,34 @@
-"""Deterministic repository profiling and STRIDE threat-model artifacts."""
+"""Repository profiling and STRIDE threat-model artifacts."""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import shlex
 import shutil
+import subprocess
+import threading
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 ARTIFACT_DIR_NAME = ".audit-hunter"
 THREAT_MODEL_FILENAME = "threat-model.md"
 SECURITY_CONFIG_FILENAME = "security-config.json"
+DEFAULT_THREAT_MODEL_MODE = "ai"
+THREAT_MODEL_MODES = ("ai", "deterministic")
+AI_PASS_MODES = ("one", "two")
+AI_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
+DEFAULT_AI_UNDERSTANDING_MODEL = "gpt-5.5"
+DEFAULT_AI_RENDER_MODEL = "gpt-5.4-mini"
+DEFAULT_AI_REASONING_EFFORT = "xhigh"
+DEFAULT_AI_TIMEOUT_SECONDS = 900
+
+ProgressCallback = Callable[[str], None]
 
 _SKIP_DIRS = {
     ".audit-hunter",
@@ -113,6 +126,26 @@ class ThreatModelArtifacts:
 
 
 @dataclass(frozen=True)
+class AIThreatModelOptions:
+    passes: str = "two"
+    understanding_model: str = DEFAULT_AI_UNDERSTANDING_MODEL
+    render_model: str = DEFAULT_AI_RENDER_MODEL
+    reasoning_effort: str | None = DEFAULT_AI_REASONING_EFFORT
+    timeout_seconds: int = DEFAULT_AI_TIMEOUT_SECONDS
+    codex_path: str | None = None
+
+
+@dataclass(frozen=True)
+class ThreatModelOptions:
+    mode: str = DEFAULT_THREAT_MODEL_MODE
+    edit: bool = False
+    editor: str | None = None
+    ai: AIThreatModelOptions = field(default_factory=AIThreatModelOptions)
+    artifact_dir: Path | None = None
+    progress: ProgressCallback | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
 class RepositoryProfile:
     name: str
     repo_path: Path
@@ -136,21 +169,43 @@ def generate_threat_model(
     repo_path: Path,
     run_id: str,
     reports_dir: Path,
+    options: ThreatModelOptions | None = None,
 ) -> ThreatModelArtifacts:
     """Generate threat-model artifacts in the target repo and copy them to reports."""
     repo_path = repo_path.expanduser().resolve()
     if not repo_path.is_dir():
         raise ThreatModelError(f"repo path is not a directory: {repo_path}")
+    options = _normalize_options(options)
 
-    profile = profile_repository(repo_path)
     target_dir = repo_path / ARTIFACT_DIR_NAME
     target_dir.mkdir(parents=True, exist_ok=True)
 
     threat_model_path = target_dir / THREAT_MODEL_FILENAME
     security_config_path = target_dir / SECURITY_CONFIG_FILENAME
-    threat_model_path.write_text(_render_threat_model(profile))
-    security_config_path.write_text(
-        json.dumps(_build_security_config(profile), indent=2) + "\n"
+    _emit_progress(options.progress, f"generating threat model with {options.mode} mode")
+    if options.mode == "deterministic":
+        profile = profile_repository(repo_path)
+        threat_model_text = _render_threat_model(profile)
+        security_config = _build_security_config(profile)
+    elif options.mode == "ai":
+        threat_model_text, security_config = _generate_ai_threat_model(
+            repo_path=repo_path,
+            run_id=run_id,
+            reports_dir=reports_dir,
+            options=options,
+        )
+    else:
+        raise ThreatModelError(
+            f"unknown threat-model mode {options.mode!r}; expected one of {THREAT_MODEL_MODES}"
+        )
+
+    _validate_threat_model_markdown(threat_model_text)
+    _validate_security_config_payload(security_config)
+    threat_model_path.write_text(threat_model_text.rstrip() + "\n")
+    security_config_path.write_text(json.dumps(security_config, indent=2) + "\n")
+    _maybe_edit_threat_model(
+        threat_model_path=threat_model_path,
+        options=options,
     )
     return copy_threat_artifacts_to_reports(
         repo_path=repo_path,
@@ -165,11 +220,17 @@ def ensure_threat_artifacts(
     run_id: str,
     reports_dir: Path,
     skip_generation: bool,
+    options: ThreatModelOptions | None = None,
 ) -> ThreatModelArtifacts:
     """Generate or reuse target threat-model artifacts, then copy them to reports."""
     repo_path = repo_path.expanduser().resolve()
+    options = _normalize_options(options)
     if skip_generation:
         _validate_target_artifacts(repo_path)
+        _maybe_edit_threat_model(
+            threat_model_path=repo_path / ARTIFACT_DIR_NAME / THREAT_MODEL_FILENAME,
+            options=options,
+        )
         return copy_threat_artifacts_to_reports(
             repo_path=repo_path,
             run_id=run_id,
@@ -179,6 +240,7 @@ def ensure_threat_artifacts(
         repo_path=repo_path,
         run_id=run_id,
         reports_dir=reports_dir,
+        options=options,
     )
 
 
@@ -248,6 +310,563 @@ def _validate_target_artifacts(repo_path: Path) -> None:
         json.loads(config_path.read_text())
     except json.JSONDecodeError as e:
         raise ThreatModelError(f"invalid security config JSON at {config_path}: {e}") from e
+
+
+def _normalize_options(options: ThreatModelOptions | None) -> ThreatModelOptions:
+    if options is None:
+        options = ThreatModelOptions()
+
+    mode = options.mode.strip().lower()
+    if mode not in THREAT_MODEL_MODES:
+        raise ThreatModelError(
+            f"unknown threat-model mode {options.mode!r}; expected one of {THREAT_MODEL_MODES}"
+        )
+
+    passes = options.ai.passes.strip().lower()
+    if passes not in AI_PASS_MODES:
+        raise ThreatModelError(
+            f"unknown AI pass mode {options.ai.passes!r}; expected one of {AI_PASS_MODES}"
+        )
+    reasoning_effort = options.ai.reasoning_effort
+    if reasoning_effort is not None:
+        reasoning_effort = reasoning_effort.strip().lower()
+        if reasoning_effort == "":
+            reasoning_effort = None
+        elif reasoning_effort not in AI_REASONING_EFFORTS:
+            raise ThreatModelError(
+                "--ai-reasoning-effort must be one of "
+                f"{AI_REASONING_EFFORTS}"
+            )
+    if options.ai.timeout_seconds < 1:
+        raise ThreatModelError("AI threat-model timeout must be at least 1 second")
+
+    return ThreatModelOptions(
+        mode=mode,
+        edit=options.edit,
+        editor=options.editor,
+        ai=AIThreatModelOptions(
+            passes=passes,
+            understanding_model=options.ai.understanding_model,
+            render_model=options.ai.render_model,
+            reasoning_effort=reasoning_effort,
+            timeout_seconds=options.ai.timeout_seconds,
+            codex_path=options.ai.codex_path,
+        ),
+        artifact_dir=options.artifact_dir,
+        progress=options.progress,
+    )
+
+
+def _generate_ai_threat_model(
+    *,
+    repo_path: Path,
+    run_id: str,
+    reports_dir: Path,
+    options: ThreatModelOptions,
+) -> tuple[str, dict[str, Any]]:
+    profile = profile_repository(repo_path)
+    artifact_dir = _ai_artifact_dir(
+        reports_dir=reports_dir,
+        run_id=run_id,
+        options=options,
+    )
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    seed_context = _profile_to_ai_seed(profile)
+    (artifact_dir / "threat-model-profile-seed.json").write_text(
+        json.dumps(seed_context, indent=2) + "\n"
+    )
+
+    if options.ai.passes == "two":
+        _emit_progress(
+            options.progress,
+            f"AI understanding pass starting with model {options.ai.understanding_model}",
+        )
+        understanding_text = _run_codex_stage(
+            repo_path=repo_path,
+            artifact_dir=artifact_dir,
+            stage_name="understanding",
+            model=options.ai.understanding_model,
+            reasoning_effort=options.ai.reasoning_effort,
+            timeout_seconds=options.ai.timeout_seconds,
+            codex_path=options.ai.codex_path,
+            prompt=_build_understanding_prompt(seed_context),
+            progress=options.progress,
+        )
+        understanding = _extract_json_object(understanding_text)
+        (artifact_dir / "threat-model-understanding.json").write_text(
+            json.dumps(understanding, indent=2, ensure_ascii=False) + "\n"
+        )
+        render_input: dict[str, Any] = {
+            "deterministic_profile": seed_context,
+            "ai_understanding": understanding,
+        }
+        stage_name = "render"
+    else:
+        render_input = {
+            "deterministic_profile": seed_context,
+            "ai_understanding": None,
+        }
+        stage_name = "single-pass"
+
+    _emit_progress(
+        options.progress,
+        f"AI render pass starting with model {options.ai.render_model}",
+    )
+    render_text = _run_codex_stage(
+        repo_path=repo_path,
+        artifact_dir=artifact_dir,
+        stage_name=stage_name,
+        model=options.ai.render_model,
+        reasoning_effort=options.ai.reasoning_effort,
+        timeout_seconds=options.ai.timeout_seconds,
+        codex_path=options.ai.codex_path,
+        prompt=_build_render_prompt(
+            repo_name=profile.name,
+            generated_at=profile.generated_at,
+            render_input=render_input,
+        ),
+        progress=options.progress,
+    )
+    payload = _extract_json_object(render_text)
+    threat_model_text, security_config = _coerce_ai_render_payload(
+        payload=payload,
+        generated_at=profile.generated_at,
+    )
+    (artifact_dir / "threat-model-rendered.json").write_text(
+        json.dumps(
+            {
+                "threat_model_markdown": threat_model_text,
+                "security_config": security_config,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n"
+    )
+    return threat_model_text, security_config
+
+
+def _profile_to_ai_seed(profile: RepositoryProfile) -> dict[str, Any]:
+    files = [str(path) for path in profile.files]
+    return {
+        "repo_name": profile.name,
+        "generated_at": profile.generated_at,
+        "file_count": len(files),
+        "files_sample": files[:400],
+        "tech_stack": profile.tech_stack,
+        "entry_points": profile.entry_points,
+        "route_files": profile.route_files,
+        "config_files": profile.config_files,
+        "data_files": profile.data_files,
+        "auth_indicators": profile.auth_indicators,
+        "excluded_paths": profile.excluded_paths,
+    }
+
+
+def _ai_artifact_dir(
+    *,
+    reports_dir: Path,
+    run_id: str,
+    options: ThreatModelOptions,
+) -> Path:
+    if options.artifact_dir is not None:
+        return options.artifact_dir.expanduser().resolve()
+    return reports_dir.expanduser().resolve() / run_id / "audit-hunter-ai"
+
+
+def _build_understanding_prompt(seed_context: dict[str, Any]) -> str:
+    return (
+        "# Task\n\n"
+        "Inspect this local repository and build a concise security architecture "
+        "understanding for a STRIDE threat model. Read as many repository files "
+        "as required to understand purpose, entry points, trust boundaries, data "
+        "stores, auth, and sensitive assets. Do not modify files. Prefer concrete "
+        "file paths, routes, commands, functions, config names, and framework "
+        "concepts over generic labels.\n\n"
+        "As you work, keep progress updates brief and concrete. Your final answer "
+        "must be only a JSON object with this shape:\n\n"
+        "{"
+        "\"repo_purpose\":\"...\","
+        "\"components\":[{\"name\":\"...\",\"purpose\":\"...\",\"security_criticality\":\"HIGH|MEDIUM|LOW\",\"entry_points\":[\"...\"]}],"
+        "\"data_flows\":[\"...\"],"
+        "\"trust_boundaries\":{\"public\":\"...\",\"authenticated\":\"...\",\"privileged\":\"...\",\"internal\":\"...\"},"
+        "\"auth_mechanism\":\"...\","
+        "\"sensitive_assets\":[\"...\"],"
+        "\"stride_risks\":[{\"category\":\"S|T|R|I|D|E\",\"threat\":\"...\",\"components\":[\"...\"],\"severity\":\"CRITICAL|HIGH|MEDIUM|LOW\",\"evidence\":[\"...\"]}],"
+        "\"excluded_paths\":[\"...\"],"
+        "\"tech_stack\":[\"...\"],"
+        "\"assumptions\":[\"...\"],"
+        "\"files_inspected\":[\"...\"]"
+        "}.\n\n"
+        "# Static seed context\n\n"
+        f"```json\n{json.dumps(seed_context, ensure_ascii=False)}\n```\n"
+    )
+
+
+def _build_render_prompt(
+    *,
+    repo_name: str,
+    generated_at: str,
+    render_input: dict[str, Any],
+) -> str:
+    return (
+        "# Task\n\n"
+        "Generate the final audit-hunter STRIDE threat-model artifacts for this "
+        "repository. If ai_understanding is null, first inspect repository files "
+        "as needed. Keep the existing output format exactly: same Markdown "
+        "section order and same security-config JSON shape. Do not modify files. "
+        "Your final answer must be only a JSON object with keys "
+        "`threat_model_markdown` and `security_config`.\n\n"
+        "# Markdown format\n\n"
+        f"# Threat Model for {repo_name}\n\n"
+        f"**Generated:** {generated_at}\n"
+        "**Version:** 1.0.0\n"
+        "**Methodology:** STRIDE\n\n"
+        "## 1. System Overview\n\n"
+        "Include a 2-3 sentence system description.\n\n"
+        "### Key Components\n\n"
+        "| Component | Purpose | Security Criticality | Entry Points |\n"
+        "|-----------|---------|---------------------|--------------|\n"
+        "| ... | ... | HIGH/MEDIUM/LOW | ... |\n\n"
+        "### Data Flow\n\n"
+        "Describe how data moves from input through processing to storage/output.\n\n"
+        "## 2. Trust Boundaries\n\n"
+        "**Zone 1 - Public:** ...\n"
+        "**Zone 2 - Authenticated:** ...\n"
+        "**Zone 3 - Privileged:** ...\n"
+        "**Zone 4 - Internal:** ...\n\n"
+        "**Auth mechanism:** ...\n\n"
+        "## 3. STRIDE Threat Analysis\n\n"
+        "For each STRIDE subsection, include either a concrete threat block or "
+        "`No material ... threat identified from inspected code.` Concrete "
+        "threat blocks must include Threat, Components, Attack vector, Severity, "
+        "Existing mitigations, and Gaps.\n\n"
+        "### S - Spoofing Identity\n"
+        "### T - Tampering with Data\n"
+        "### R - Repudiation\n"
+        "### I - Information Disclosure\n"
+        "### D - Denial of Service\n"
+        "### E - Elevation of Privilege\n\n"
+        "## 4. Vulnerability Pattern Library\n\n"
+        "Include a detected stack heading plus Vulnerable and Safe code blocks.\n\n"
+        "## 5. Assumptions & Accepted Risks\n\n"
+        "Use a short numbered list.\n\n"
+        "# security_config shape\n\n"
+        "{"
+        "\"version\":\"1.0.0\","
+        f"\"generated\":\"{generated_at}\","
+        "\"severity_thresholds\":{\"block_merge\":\"CRITICAL\",\"require_review\":\"HIGH\",\"inform\":\"MEDIUM\"},"
+        "\"confidence_threshold\":0.8,"
+        "\"excluded_paths\":[\"test/\",\"tests/\",\"docs/\",\"scripts/\"],"
+        "\"tech_stack\":[\"...\"],"
+        "\"artifact_root\":\".audit-hunter\""
+        "}\n\n"
+        "# Repository context\n\n"
+        f"```json\n{json.dumps(render_input, ensure_ascii=False)}\n```\n"
+    )
+
+
+def _run_codex_stage(
+    *,
+    repo_path: Path,
+    artifact_dir: Path,
+    stage_name: str,
+    model: str,
+    reasoning_effort: str | None,
+    timeout_seconds: int,
+    codex_path: str | None,
+    prompt: str,
+    progress: ProgressCallback | None,
+) -> str:
+    codex = codex_path or shutil.which("codex") or "codex"
+    safe_stage = stage_name.replace("/", "-")
+    output_last_message = artifact_dir / f"threat-model-{safe_stage}.last.txt"
+    stdout_path = artifact_dir / f"threat-model-{safe_stage}.stdout.jsonl"
+    stderr_path = artifact_dir / f"threat-model-{safe_stage}.stderr.txt"
+    command_path = artifact_dir / f"threat-model-{safe_stage}.command.json"
+    cmd = [
+        codex,
+        "exec",
+        "--model",
+        model,
+    ]
+    if reasoning_effort is not None:
+        cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
+    cmd.extend([
+        "--json",
+        "--output-last-message",
+        str(output_last_message),
+        "-C",
+        str(repo_path),
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "-",
+    ])
+    command_path.write_text(json.dumps({"argv": cmd}, indent=2) + "\n")
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    events: list[dict[str, Any]] = []
+    lock = threading.Lock()
+    _emit_progress(progress, f"{stage_name}: launching Codex")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=repo_path,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        raise ThreatModelError(
+            "Codex CLI was not found; install codex or pass --codex-path, "
+            "or use deterministic threat-model mode"
+        ) from e
+
+    def read_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_chunks.append(line)
+            event = _parse_json_line(line)
+            if event is None:
+                continue
+            with lock:
+                events.append(event)
+            message = _codex_progress_message(event)
+            if message:
+                _emit_progress(progress, f"{stage_name}: {message}")
+
+    def read_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_chunks.append(line)
+
+    stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    assert proc.stdin is not None
+    try:
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        returncode = proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as e:
+        proc.kill()
+        returncode = proc.wait()
+        raise ThreatModelError(
+            f"Codex {stage_name} pass timed out after {timeout_seconds} seconds"
+        ) from e
+    finally:
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        stdout_path.write_text("".join(stdout_chunks))
+        stderr_path.write_text("".join(stderr_chunks))
+
+    if returncode != 0:
+        details = "\n".join(
+            text for text in ("".join(stderr_chunks).strip(), "".join(stdout_chunks)[-2000:].strip())
+            if text
+        )
+        raise ThreatModelError(
+            f"Codex {stage_name} pass failed with exit code {returncode}: "
+            f"{details[:1000]}"
+        )
+
+    if output_last_message.exists():
+        final_text = output_last_message.read_text()
+    else:
+        final_text = _last_codex_message_text(events) or "".join(stdout_chunks)
+    _emit_progress(progress, f"{stage_name}: Codex completed")
+    return final_text
+
+
+def _parse_json_line(line: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _codex_progress_message(event: dict[str, Any]) -> str | None:
+    for key in ("message", "text", "last_message", "output"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return _shorten(value.strip())
+    msg = event.get("msg")
+    if isinstance(msg, dict):
+        for key in ("message", "text", "output"):
+            value = msg.get(key)
+            if isinstance(value, str) and value.strip():
+                return _shorten(value.strip())
+    event_type = event.get("type") or event.get("event") or event.get("kind")
+    if isinstance(event_type, str) and event_type.strip():
+        return _shorten(event_type.strip().replace("_", " "))
+    return None
+
+
+def _last_codex_message_text(events: list[dict[str, Any]]) -> str | None:
+    for event in reversed(events):
+        for key in ("message", "text", "last_message", "output"):
+            value = event.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        msg = event.get("msg")
+        if isinstance(msg, dict):
+            for key in ("message", "text", "output"):
+                value = msg.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+    return None
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    text = text.strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end < start:
+            raise ThreatModelError("AI threat-model output did not contain JSON") from None
+        try:
+            payload = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as e:
+            raise ThreatModelError(f"AI threat-model output was invalid JSON: {e}") from e
+    if not isinstance(payload, dict):
+        raise ThreatModelError("AI threat-model output must be a JSON object")
+    return payload
+
+
+def _coerce_ai_render_payload(
+    *,
+    payload: dict[str, Any],
+    generated_at: str,
+) -> tuple[str, dict[str, Any]]:
+    threat_model_text = payload.get("threat_model_markdown")
+    if not isinstance(threat_model_text, str):
+        threat_model_text = payload.get("threat_model")
+    if not isinstance(threat_model_text, str):
+        threat_model_text = payload.get("markdown")
+    if not isinstance(threat_model_text, str) or not threat_model_text.strip():
+        raise ThreatModelError("AI output missing threat_model_markdown")
+
+    security_config = payload.get("security_config")
+    if not isinstance(security_config, dict):
+        security_config = payload.get("security-config")
+    if not isinstance(security_config, dict):
+        raise ThreatModelError("AI output missing security_config object")
+    security_config = dict(security_config)
+    security_config.setdefault("version", "1.0.0")
+    security_config.setdefault("generated", generated_at)
+    security_config["artifact_root"] = ARTIFACT_DIR_NAME
+    return threat_model_text, security_config
+
+
+def _validate_threat_model_markdown(text: str) -> None:
+    required = [
+        "# Threat Model for ",
+        "**Generated:**",
+        "**Version:** 1.0.0",
+        "**Methodology:** STRIDE",
+        "## 1. System Overview",
+        "### Key Components",
+        "### Data Flow",
+        "## 2. Trust Boundaries",
+        "## 3. STRIDE Threat Analysis",
+        "### S - Spoofing Identity",
+        "### T - Tampering with Data",
+        "### R - Repudiation",
+        "### I - Information Disclosure",
+        "### D - Denial of Service",
+        "### E - Elevation of Privilege",
+        "## 4. Vulnerability Pattern Library",
+        "## 5. Assumptions & Accepted Risks",
+    ]
+    cursor = -1
+    for marker in required:
+        idx = text.find(marker)
+        if idx < 0:
+            raise ThreatModelError(f"threat model is missing required section: {marker}")
+        if idx < cursor:
+            raise ThreatModelError(
+                f"threat model section is out of order: {marker}"
+            )
+        cursor = idx
+
+
+def _validate_security_config_payload(payload: dict[str, Any]) -> None:
+    required = {
+        "version",
+        "generated",
+        "severity_thresholds",
+        "confidence_threshold",
+        "excluded_paths",
+        "tech_stack",
+        "artifact_root",
+    }
+    missing = sorted(required - set(payload))
+    if missing:
+        raise ThreatModelError(
+            "security config missing required field(s): " + ", ".join(missing)
+        )
+    if payload["artifact_root"] != ARTIFACT_DIR_NAME:
+        raise ThreatModelError(
+            f"security config artifact_root must be {ARTIFACT_DIR_NAME!r}"
+        )
+    if not isinstance(payload["severity_thresholds"], dict):
+        raise ThreatModelError("security config severity_thresholds must be an object")
+    for key in ("block_merge", "require_review", "inform"):
+        if not isinstance(payload["severity_thresholds"].get(key), str):
+            raise ThreatModelError(
+                f"security config severity_thresholds.{key} must be a string"
+            )
+    if not isinstance(payload["confidence_threshold"], int | float):
+        raise ThreatModelError("security config confidence_threshold must be numeric")
+    if not 0 <= float(payload["confidence_threshold"]) <= 1:
+        raise ThreatModelError("security config confidence_threshold must be between 0 and 1")
+    for key in ("excluded_paths", "tech_stack"):
+        value = payload[key]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ThreatModelError(f"security config {key} must be a list of strings")
+
+
+def _maybe_edit_threat_model(
+    *,
+    threat_model_path: Path,
+    options: ThreatModelOptions,
+) -> None:
+    if not options.edit:
+        return
+    editor = options.editor or os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    command = shlex.split(editor)
+    if not command:
+        raise ThreatModelError("editor command cannot be empty")
+    command.append(str(threat_model_path))
+    _emit_progress(options.progress, f"opening editor for {threat_model_path}")
+    completed = subprocess.run(command, check=False)
+    if completed.returncode != 0:
+        raise ThreatModelError(
+            f"editor exited with code {completed.returncode}; threat model was not accepted"
+        )
+    _validate_threat_model_markdown(threat_model_path.read_text())
+    _emit_progress(options.progress, "edited threat model accepted")
+
+
+def _emit_progress(progress: ProgressCallback | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
+
+
+def _shorten(text: str, *, limit: int = 160) -> str:
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def _iter_repo_files(repo_path: Path, *, limit: int = 5000) -> list[Path]:

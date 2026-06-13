@@ -25,10 +25,40 @@ secret or vulnerability scanning logic.
 ### threat-model
 
 `audit-hunter threat-model` generates repository-specific STRIDE threat models
-and matching security configuration for already-cloned local repositories:
+and matching security configuration for already-cloned local repositories. It
+uses Codex by default so the model can read the source tree and infer more
+project context while preserving the same output files and format:
 
 ```bash
 uv run --locked audit-hunter threat-model --repo /path/to/target --run-id my-run
+```
+
+Use the original deterministic, no-LLM profiler when you want a fast offline
+baseline:
+
+```bash
+uv run --locked audit-hunter threat-model --repo /path/to/target --run-id my-run \
+  --mode deterministic
+```
+
+AI mode runs Codex in a read-only sandbox, shows progress in the terminal, and
+writes raw run artifacts under `scratch/artifacts/<run-id>/audit-hunter/`.
+Tune the model calls with:
+
+```bash
+--ai-passes one|two
+--ai-understanding-model gpt-5.5
+--ai-render-model gpt-5.4-mini
+--ai-reasoning-effort xhigh
+--ai-timeout 900
+--codex-path /path/to/codex
+```
+
+Review or adjust the generated Markdown before it is copied to reports:
+
+```bash
+uv run --locked audit-hunter threat-model --repo /path/to/target --run-id my-run \
+  --edit-threat-model
 ```
 
 It inspects:
@@ -56,9 +86,10 @@ explanation of the repo, the key trust boundaries, realistic threat scenarios,
 and the vulnerability patterns worth prioritizing. Treat it as the first
 artifact in an audit.
 
-For a higher-fidelity agent-authored model, `threat-model/` remains available
-as a `SKILL.md` style skill. The skill metadata exposes it as `audit-hunter`,
-so a typical prompt is:
+For deterministic generation, the same Markdown and JSON files are produced
+without calling an LLM. The standalone `threat-model/` skill remains available
+for manual agent workflows. The skill metadata exposes it as `audit-hunter`, so
+a typical prompt is:
 
 ```text
 Use $audit-hunter to generate a STRIDE threat model and security config for this codebase.
@@ -143,7 +174,8 @@ uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
 `assess` runs these steps in order:
 
 1. Generate `.audit-hunter/threat-model.md` and
-   `.audit-hunter/security-config.json`, unless `--skip-threat-model` is set.
+   `.audit-hunter/security-config.json` with AI mode by default, unless
+   `--skip-threat-model` is set.
 2. Build generated vuln-hunter scope notes from the threat model and security
    config.
 3. Run `secret-hunter` against the target repo.
@@ -180,6 +212,23 @@ uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
   --skip-threat-model
 ```
 
+Use the deterministic threat model in the one-shot flow, or pause for terminal
+editor review before vuln-hunter scope notes are built:
+
+```bash
+uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
+  --threat-model-mode deterministic
+
+uv run --locked audit-hunter assess --repo /path/to/target --run-id my-run \
+  --edit-threat-model
+```
+
+The one-shot flow also accepts the AI tuning flags with a `--threat-model-`
+prefix, such as `--threat-model-ai-passes`,
+`--threat-model-understanding-model`, `--threat-model-render-model`,
+`--threat-model-reasoning-effort`, `--threat-model-timeout`, and
+`--threat-model-codex-path`.
+
 The generated vulnerability scope file is written under
 `scratch/artifacts/<run-id>/audit-hunter/`. In single-run mode, user
 `--scope-notes` are appended to the generated threat context. In campaign mode,
@@ -211,7 +260,7 @@ Install the nested vulnerability hunter environment:
 uv sync --project vuln-hunter --locked --extra dev
 ```
 
-Configure Codex/OpenAI auth for vulnerability hunting:
+Configure Codex/OpenAI auth for AI threat modeling and vulnerability hunting:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
@@ -368,12 +417,13 @@ Both tools inspect target source code, and `vuln-hunter` may run agent-created
 PoCs in per-task scratch directories. Run audits inside a disposable VM or
 container when the target source is untrusted.
 
-`vuln-hunter` and `secret-hunter` read everything made available to them,
-including `.env` or `secrets/` directories in the target. Raw artifacts are
-written under `scratch/`, final reports are written under `reports/`, and
-local vulnerability run state is kept in `vuln-hunter/state.db`. Treat raw
-scanner artifacts as sensitive; normalized reports redact full secret values,
-but scanner-native output may contain more detail.
+AI threat-model mode, `vuln-hunter`, and `secret-hunter` read everything made
+available to them, including `.env` or `secrets/` directories in the target.
+AI threat-model mode sends selected repository context through Codex/OpenAI.
+Raw artifacts are written under `scratch/`, final reports are written under
+`reports/`, and local vulnerability run state is kept in `vuln-hunter/state.db`.
+Treat raw scanner and AI artifacts as sensitive; normalized reports redact full
+secret values, but scanner-native output may contain more detail.
 
 ## License
 
