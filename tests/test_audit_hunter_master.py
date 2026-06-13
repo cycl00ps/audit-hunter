@@ -9,6 +9,7 @@ from jsonschema import Draft7Validator
 
 from audit_hunter import assessment as assessment_mod
 from audit_hunter import cli
+from audit_hunter import threat_model as threat_model_mod
 
 
 SCHEMA = Path(__file__).resolve().parent.parent / "audit_hunter" / "schemas" / "audit_report.schema.json"
@@ -64,6 +65,8 @@ def test_audit_hunter_threat_model_writes_target_and_report_artifacts(tmp_path: 
             str(repo),
             "--run-id",
             "run1",
+            "--mode",
+            "deterministic",
             "--reports-dir",
             str(reports),
         ],
@@ -84,6 +87,139 @@ def test_audit_hunter_threat_model_writes_target_and_report_artifacts(tmp_path: 
     assert "Python" in payload["tech_stack"]
     assert "FastAPI" in payload["tech_stack"]
     assert "# Threat Model for repo" in target_threat_model.read_text()
+
+
+def test_audit_hunter_threat_model_defaults_to_ai_and_writes_same_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    reports = tmp_path / "reports"
+    scratch = tmp_path / "scratch"
+    repo.mkdir()
+    (repo / "app.py").write_text("def login():\n    pass\n")
+    calls: list[str] = []
+
+    def fake_codex_stage(**kwargs):
+        calls.append(kwargs["stage_name"])
+        if kwargs["stage_name"] == "understanding":
+            return json.dumps({
+                "repo_purpose": "AI-understood test application",
+                "components": [],
+                "data_flows": [],
+                "trust_boundaries": {},
+                "auth_mechanism": "login function",
+                "sensitive_assets": [],
+                "stride_risks": [],
+                "excluded_paths": ["tests/"],
+                "tech_stack": ["Python"],
+                "assumptions": [],
+                "files_inspected": ["app.py"],
+            })
+        return json.dumps({
+            "threat_model_markdown": _valid_threat_model_text("repo", "AI-authored"),
+            "security_config": _valid_security_config(["Python"]),
+        })
+
+    monkeypatch.setattr(threat_model_mod, "_run_codex_stage", fake_codex_stage)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "threat-model",
+            "--repo",
+            str(repo),
+            "--run-id",
+            "run1",
+            "--scratch-dir",
+            str(scratch),
+            "--reports-dir",
+            str(reports),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["understanding", "render"]
+    assert "AI understanding pass starting" in result.output
+    target_threat_model = repo / ".audit-hunter" / "threat-model.md"
+    report_threat_model = reports / "run1" / "threat-model.md"
+    assert "AI-authored" in target_threat_model.read_text()
+    assert report_threat_model.read_text() == target_threat_model.read_text()
+    assert (
+        scratch / "artifacts" / "run1" / "audit-hunter" / "threat-model-profile-seed.json"
+    ).exists()
+
+
+def test_audit_hunter_threat_model_edit_updates_report_copy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    reports = tmp_path / "reports"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('hello')\n")
+
+    def fake_editor(command, check):
+        assert check is False
+        Path(command[-1]).write_text(_valid_threat_model_text("repo", "Edited"))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(threat_model_mod.subprocess, "run", fake_editor)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "threat-model",
+            "--repo",
+            str(repo),
+            "--run-id",
+            "run1",
+            "--reports-dir",
+            str(reports),
+            "--mode",
+            "deterministic",
+            "--edit-threat-model",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Edited" in (repo / ".audit-hunter" / "threat-model.md").read_text()
+    assert "Edited" in (reports / "run1" / "threat-model.md").read_text()
+
+
+def test_audit_hunter_threat_model_ai_rejects_invalid_markdown(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('hello')\n")
+
+    def fake_codex_stage(**kwargs):
+        if kwargs["stage_name"] == "understanding":
+            return json.dumps({"repo_purpose": "test"})
+        return json.dumps({
+            "threat_model_markdown": "# Not the right format\n",
+            "security_config": _valid_security_config(["Python"]),
+        })
+
+    monkeypatch.setattr(threat_model_mod, "_run_codex_stage", fake_codex_stage)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "threat-model",
+            "--repo",
+            str(repo),
+            "--run-id",
+            "run1",
+            "--reports-dir",
+            str(tmp_path / "reports"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "missing required section" in result.output
 
 
 def test_audit_hunter_assess_runs_tools_and_passes_generated_scope(
@@ -147,6 +283,8 @@ def test_audit_hunter_assess_runs_tools_and_passes_generated_scope(
             str(scratch),
             "--reports-dir",
             str(reports),
+            "--threat-model-mode",
+            "deterministic",
             "--no-ai-analysis",
             "--no-verify",
             "--max-tokens",
@@ -293,6 +431,8 @@ def test_audit_hunter_assess_threat_scope_runs_zero_keeps_user_scope_only(
             str(reports),
             "--scratch-dir",
             str(scratch),
+            "--threat-model-mode",
+            "deterministic",
             "--scope-notes",
             str(user_scope),
             "--threat-scope-runs",
@@ -348,6 +488,8 @@ def test_audit_hunter_assess_campaign_targets_first_run_by_default(
             str(reports),
             "--scratch-dir",
             str(scratch),
+            "--threat-model-mode",
+            "deterministic",
             "--vuln-mode",
             "campaign",
             "--runs",
@@ -466,6 +608,8 @@ def test_audit_hunter_assess_fails_on_vuln_nonzero_without_combining(
             str(reports),
             "--scratch-dir",
             str(tmp_path / "scratch"),
+            "--threat-model-mode",
+            "deterministic",
             "--vuln-command",
             "vuln-hunter",
         ],
@@ -474,6 +618,100 @@ def test_audit_hunter_assess_fails_on_vuln_nonzero_without_combining(
     assert result.exit_code == 1
     assert "vulnerability scan failed with exit code 2" in result.output
     assert not (reports / "run1" / "audit-hunter.report.json").exists()
+
+
+def _valid_threat_model_text(repo_name: str, marker: str) -> str:
+    return "\n".join([
+        f"# Threat Model for {repo_name}",
+        "",
+        "**Generated:** 2026-06-13T00:00:00+10:00",
+        "**Version:** 1.0.0",
+        "**Methodology:** STRIDE",
+        "",
+        "## 1. System Overview",
+        "",
+        f"{marker} repository overview.",
+        "",
+        "### Key Components",
+        "",
+        "| Component | Purpose | Security Criticality | Entry Points |",
+        "|-----------|---------|---------------------|--------------|",
+        "| App | Handles requests | HIGH | `app.py` |",
+        "",
+        "### Data Flow",
+        "",
+        "Data enters through `app.py` and leaves through responses.",
+        "",
+        "## 2. Trust Boundaries",
+        "",
+        "**Zone 1 - Public:** CLI or HTTP input.",
+        "**Zone 2 - Authenticated:** User context.",
+        "**Zone 3 - Privileged:** Operator config.",
+        "**Zone 4 - Internal:** Filesystem.",
+        "",
+        "**Auth mechanism:** login function.",
+        "",
+        "## 3. STRIDE Threat Analysis",
+        "",
+        "### S - Spoofing Identity",
+        "",
+        "No material spoofing threat identified from inspected code.",
+        "",
+        "### T - Tampering with Data",
+        "",
+        "No material tampering threat identified from inspected code.",
+        "",
+        "### R - Repudiation",
+        "",
+        "No material repudiation threat identified from inspected code.",
+        "",
+        "### I - Information Disclosure",
+        "",
+        "No material information disclosure threat identified from inspected code.",
+        "",
+        "### D - Denial of Service",
+        "",
+        "No material denial-of-service threat identified from inspected code.",
+        "",
+        "### E - Elevation of Privilege",
+        "",
+        "No material elevation-of-privilege threat identified from inspected code.",
+        "",
+        "## 4. Vulnerability Pattern Library",
+        "",
+        "### Python Patterns",
+        "",
+        "**Vulnerable:**",
+        "```text",
+        "subprocess.run(user_input, shell=True)",
+        "```",
+        "",
+        "**Safe:**",
+        "```text",
+        "subprocess.run(['tool', validated_arg], shell=False)",
+        "```",
+        "",
+        "## 5. Assumptions & Accepted Risks",
+        "",
+        "1. Test assumption.",
+        "",
+    ])
+
+
+def _valid_security_config(tech_stack: list[str]) -> dict:
+    return {
+        "version": "1.0.0",
+        "generated": "2026-06-13T00:00:00+10:00",
+        "severity_thresholds": {
+            "block_merge": "CRITICAL",
+            "require_review": "HIGH",
+            "inform": "MEDIUM",
+        },
+        "confidence_threshold": 0.8,
+        "excluded_paths": ["tests/"],
+        "tech_stack": tech_stack,
+        "artifact_root": ".audit-hunter",
+    }
 
 
 def _write_tool_report(
